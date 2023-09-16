@@ -32,7 +32,7 @@ fn main() {
     let program = parse(&tokens);
     let asm = generate(&program);
 
-    fs::write(&out_path, &asm).unwrap();
+    fs::write(out_path, asm).unwrap();
 }
 
 fn tokenize(source: &str) -> Vec<Token> {

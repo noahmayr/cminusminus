@@ -9,9 +9,9 @@ pub enum Addr {
     Label(String),
 }
 
-impl Into<Data> for Addr {
-    fn into(self) -> Data {
-        Data::Addr(self)
+impl From<Addr> for Data {
+    fn from(val: Addr) -> Self {
+        Data::Addr(val)
     }
 }
 
@@ -30,9 +30,9 @@ pub enum Data {
     Value(usize),
 }
 
-impl Into<Data> for usize {
-    fn into(self) -> Data {
-        Data::Value(self)
+impl From<usize> for Data {
+    fn from(val: usize) -> Self {
+        Data::Value(val)
     }
 }
 
@@ -65,9 +65,9 @@ impl FileDescriptor {
     }
 }
 
-impl Into<Data> for FileDescriptor {
-    fn into(self) -> Data {
-        self.0.into()
+impl From<FileDescriptor> for Data {
+    fn from(val: FileDescriptor) -> Self {
+        val.0.into()
     }
 }
 
@@ -95,12 +95,20 @@ impl Syscall {
     }
 }
 
-impl Into<usize> for &Syscall {
-    fn into(self) -> usize {
-        match self {
-            Syscall::Exit { code } => 1,
-            Syscall::Read { fd, buf, bytes } => 3,
-            Syscall::Write { fd, buf, bytes } => 4,
+impl From<&Syscall> for usize {
+    fn from(val: &Syscall) -> Self {
+        match val {
+            Syscall::Exit { code: _ } => 1,
+            Syscall::Read {
+                fd: _,
+                buf: _,
+                bytes: _,
+            } => 3,
+            Syscall::Write {
+                fd: _,
+                buf: _,
+                bytes: _,
+            } => 4,
         }
     }
 }
@@ -141,22 +149,22 @@ impl<'a> Generator<'a> {
 
     fn generate_statement(&mut self, statement: &Statement) {
         match statement {
-            &Statement::Builtin(ref builtin) => self.generate_bultin(&builtin),
+            Statement::Builtin(builtin) => self.generate_bultin(builtin),
         }
     }
 
     fn generate_bultin(&mut self, builtin: &Builtin) {
         match builtin {
-            &Builtin::Exit(ref expression) => {
-                match self.generate_expression(&expression) {
+            Builtin::Exit(expression) => {
+                match self.generate_expression(expression) {
                     Type::Int(value) => self.push_syscall(Syscall::Exit {
                         code: value.parse().unwrap(),
                     }),
                     t => panic!("Unsupported type '{}' used in exit(). int expected", t),
                 };
             }
-            &Builtin::Print(ref expression) => {
-                match self.generate_expression(&expression) {
+            Builtin::Print(expression) => {
+                match self.generate_expression(expression) {
                     Type::String { addr, len } => self.push_syscall(Syscall::Write {
                         fd: FileDescriptor::stdout(),
                         buf: addr,
@@ -170,14 +178,14 @@ impl<'a> Generator<'a> {
 
     fn generate_expression(&mut self, expression: &Expression) -> Type {
         match expression {
-            Expression::Term(term) => self.generate_term(&term),
+            Expression::Term(term) => self.generate_term(term),
         }
     }
 
     fn generate_term(&mut self, term: &Term) -> Type {
         match term {
-            &Term::IntLiteral(ref value) => Type::Int(value.clone()),
-            &Term::StringLiteral(ref value) => {
+            Term::IntLiteral(value) => Type::Int(value.clone()),
+            Term::StringLiteral(value) => {
                 let label = match self.string_lits.iter().position(|it| it == value) {
                     Some(index) => str_label(index),
                     None => {
@@ -205,17 +213,13 @@ impl<'a> Generator<'a> {
 
     fn push_syscall(&mut self, syscall: Syscall) {
         match &syscall {
-            &Syscall::Exit { ref code } => self.load_register(0, code.to_owned()),
-            &Syscall::Read {
-                ref fd,
-                ref buf,
-                ref bytes,
+            Syscall::Exit { code } => self.load_register(0, code.to_owned()),
+            Syscall::Read {
+                fd: _,
+                buf: _,
+                bytes: _,
             } => todo!(),
-            &Syscall::Write {
-                ref fd,
-                ref buf,
-                ref bytes,
-            } => {
+            Syscall::Write { fd, buf, bytes } => {
                 self.load_register(0, fd.to_owned());
                 self.load_register(1, buf.to_owned());
                 self.load_register(2, bytes.to_owned());

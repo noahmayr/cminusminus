@@ -73,7 +73,7 @@ impl<'a> Lexer<'a> {
                     None => panic!("Failed to parse keyword after peeking alphabetic char"),
                 };
                 tokens.push(token);
-            } else if let Some(value) = self.consume_slice(|ch| ch.is_digit(10)) {
+            } else if let Some(value) = self.consume_slice(|ch| ch.is_ascii_digit()) {
                 tokens.push(Token::IntLiteral(value.to_string()));
             } else if self.consume_slice(char::is_whitespace).is_some() {
                 continue;
@@ -89,15 +89,14 @@ impl<'a> Lexer<'a> {
                         }
                         '\\' => {
                             self.advance();
-                            let next = self.peek();
-
-                            if next == None {
+                            let Some(next) = self.peek() else {
                                 panic!("Unterminated string during escape");
-                            } else if next == Some('"') {
-                                buf.push_str("\\\"");
+                            };
+
+                            buf.push(ch);
+                            if next == '"' {
+                                buf.push(next);
                                 self.advance();
-                            } else {
-                                buf.push_str("\\");
                             }
                         }
                         _ => {
@@ -118,7 +117,7 @@ impl<'a> Lexer<'a> {
             }
         }
         self.cursor = 0;
-        return tokens;
+        tokens
     }
 
     fn consume_slice<P>(&mut self, predicate: P) -> Option<&str>
@@ -126,24 +125,16 @@ impl<'a> Lexer<'a> {
         P: Fn(char) -> bool,
     {
         let mut offset = 0;
-        while self.peek_ahead(offset).map_or(false, |ch| predicate(ch)) {
+        while self.peek_ahead(offset).map_or(false, &predicate) {
             offset += 1;
         }
         let result = &self.source[self.cursor..(self.cursor + offset)];
-        if result.len() > 0 {
+        if !result.is_empty() {
             self.advance_by(offset);
             return Some(result);
         }
         None
     }
-
-    // fn consume(&mut self) -> Option<char> {
-    //     let res = self.source.chars().nth(self.cursor);
-    //     if res.is_some() {
-    //         self.cursor += 1;
-    //     }
-    //     return res;
-    // }
 
     fn advance(&mut self) {
         self.advance_by(1);

@@ -60,7 +60,7 @@ impl<'a> Parser<'a> {
 
     fn parse_builtin(&mut self) -> Result<Option<Builtin>> {
         match self.peek() {
-            Some(&Token::Keyword(ref keyword)) => match keyword {
+            Some(Token::Keyword(keyword)) => match keyword {
                 Keyword::Exit => {
                     self.advance();
                     self.try_consume(&Token::OpenParen)?;
@@ -91,19 +91,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression(&mut self) -> Option<Expression> {
-        match self.peek() {
-            _ => Some(Expression::Term(self.parse_term()?)),
-        }
+        Some(Expression::Term(self.parse_term()?))
     }
 
     fn parse_term(&mut self) -> Option<Term> {
         match self.peek() {
-            Some(&Token::IntLiteral(ref value)) => {
+            Some(Token::IntLiteral(value)) => {
                 let term = Term::IntLiteral(value.clone());
                 self.advance();
                 Some(term)
             }
-            Some(&Token::StringLiteral(ref value)) => {
+            Some(Token::StringLiteral(value)) => {
                 let term = Term::StringLiteral(value.clone());
                 self.advance();
                 Some(term)
@@ -120,7 +118,7 @@ impl<'a> Parser<'a> {
     }
 
     fn consume(&mut self) -> Option<&Token> {
-        let token = self.tokens.iter().nth(self.cursor);
+        let token = self.tokens.get(self.cursor);
         self.cursor += 1;
         token
     }
@@ -146,6 +144,6 @@ impl<'a> Parser<'a> {
     }
 
     fn peek_ahead(&self, offset: usize) -> Option<&Token> {
-        self.tokens.iter().nth(self.cursor + offset)
+        self.tokens.get(self.cursor + offset)
     }
 }
