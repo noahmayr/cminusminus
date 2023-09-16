@@ -2,7 +2,7 @@ example_dir := "./examples"
 example := "helloworld"
 entry := "main.cmm"
 source_path := example_dir / example / entry
-out_path := example_dir / example / "out"
+out_path := if example == "" { error("no example selected") } else { example_dir / example / "out" }
 exec_path := out_path / example
 asm_path := exec_path + ".asm"
 object_path := exec_path + ".o"
