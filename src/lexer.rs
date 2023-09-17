@@ -1,43 +1,28 @@
-use miette::{bail, miette, LabeledSpan, Report, Result, SourceSpan};
-use std::{cell::RefCell, fmt::Display, sync::Arc};
+use arcstr::ArcStr;
+use miette::{bail, miette, LabeledSpan, Report, Result};
+use std::{cell::RefCell, fmt::Display};
 
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum Keyword {
-    Exit,
-    Print,
-}
+use crate::context::Src;
 
-impl TryFrom<&str> for Keyword {
-    type Error = String;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "exit" => Ok(Self::Exit),
-            "print" => Ok(Self::Print),
-            str => Err(format!("Unknown keyword {}", str)),
-        }
-    }
-}
+type Str = ArcStr;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Token {
-    Keyword(Keyword),
-    IntLiteral(String),
-    StringLiteral(String),
+    IntLiteral(Str),
+    StringLiteral(Str),
+    Ident(Str),
+    // Let,
     OpenParen,
     CloseParen,
     Semicolon,
+    // Equals,
 }
 
-impl Token {
-    pub fn len(&self) -> usize {
-        self.to_string().len()
-    }
-
-    pub fn span(&self, pos: usize) -> SourceSpan {
-        (pos, self.len()).into()
-    }
-}
+// impl Token {
+//     pub fn span(&self, pos: usize) -> SourceSpan {
+//         (pos, self.to_string().len()).into()
+//     }
+// }
 
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -45,55 +30,53 @@ impl Display for Token {
             f,
             "{}",
             match self {
-                Token::Keyword(keyword) => match keyword {
-                    Keyword::Exit => "exit",
-                    Keyword::Print => "print",
-                },
-                Token::IntLiteral(value) => value,
-                Token::StringLiteral(value) => value,
-                Token::OpenParen => "(",
-                Token::CloseParen => ")",
-                Token::Semicolon => ";",
+                // Token::Let => "let",
+                Token::IntLiteral(value) => format!("int '{}'", value),
+                Token::StringLiteral(value) => format!("string '{}'", value),
+                Token::Ident(name) => format!("ident '{}'", name),
+                Token::OpenParen => "(".to_string(),
+                Token::CloseParen => ")".to_string(),
+                Token::Semicolon => ";".to_string(),
+                // Token::Equals => "=",
             },
         )
     }
 }
 
+pub type SrcToken = Src<Token>;
+
 pub struct Lexer {
-    source: Arc<str>,
+    source: Str,
     cursor: RefCell<usize>,
 }
 
 impl Lexer {
-    pub fn new<S: Into<Arc<str>>>(source: S) -> Self {
+    pub fn new<S: Into<Str>>(source: S) -> Self {
         Self {
             source: source.into(),
             cursor: RefCell::new(0),
         }
     }
 
-    pub fn tokenize(&self) -> Result<Vec<(Token, usize)>> {
-        let mut tokens: Vec<(Token, usize)> = vec![];
+    pub fn tokenize<S: Into<Str>>(source: S) -> Result<Vec<SrcToken>> {
+        Lexer::new(source).run()
+    }
+
+    pub fn run(&self) -> Result<Vec<SrcToken>> {
+        let mut tokens: Vec<SrcToken> = vec![];
         while let Some((ch, pos)) = self.peek() {
             if let Some(buf) = self.consume_slice_after(char::is_alphabetic, char::is_alphanumeric)
             {
-                let keyword = Keyword::try_from(buf);
-
-                let token = match keyword {
-                    Ok(keyword) => Token::Keyword(keyword),
-                    Err(err) => {
-                        bail!(self.error(
-                            pos,
-                            buf.len(),
-                            "unknown_keyword".into(),
-                            Some(err),
-                            None
-                        ));
-                    }
+                let token = match buf {
+                    // "let" => Token::Let,
+                    ident => Token::Ident(ident.into()),
                 };
-                tokens.push((token, pos));
+                tokens.push(Src::new(token, (pos, buf.len())));
             } else if let Some(value) = self.consume_slice(|ch| ch.is_ascii_digit()) {
-                tokens.push((Token::IntLiteral(value.to_string()), pos));
+                tokens.push(Src::new(
+                    Token::IntLiteral(value.into()),
+                    (pos, value.len()),
+                ));
             } else if self.consume_slice(char::is_whitespace).is_some() {
                 continue;
             } else if ch == '"' {
@@ -123,25 +106,25 @@ impl Lexer {
                         }
                     }
                 }
-                tokens.push((Token::StringLiteral(buf), pos))
+                let span = (pos, buf.len());
+                tokens.push(Src::new(Token::StringLiteral(buf.into()), span))
             } else {
-                tokens.push((
+                tokens.push(Src::new(
                     match ch {
                         '(' => Token::OpenParen,
                         ')' => Token::CloseParen,
                         ';' => Token::Semicolon,
-                        unsupported => {
-                            bail!(self.error_at(
-                                pos,
-                                "unsupported_token".into(),
-                                Some(format!("Unexpected token '{}'", unsupported)),
-                                None
-                            ));
-                        }
+                        // '=' => Token::Equals,
+                        unknown => bail!(self.error_at(
+                            pos,
+                            "unexpected_symbol".into(),
+                            Some(format!("Unexpected symbol '{}'", unknown)),
+                            None
+                        )),
                     },
-                    pos,
+                    (pos, 1),
                 ));
-                self.advance()
+                self.advance();
             }
         }
         *self.cursor.borrow_mut() = 0;
@@ -181,7 +164,7 @@ impl Lexer {
                 "Error lexing source code."
             ),
         }
-        .with_source_code(self.source.clone())
+        .with_source_code(self.source.to_string())
     }
 
     fn consume_slice_after<S, R>(&self, predicate_start: S, predicate_rest: R) -> Option<&str>

@@ -1,75 +1,48 @@
-use std::{cell::RefCell, sync::Arc};
+use std::cell::RefCell;
 
-use crate::lexer::{Keyword, Token};
+use crate::{context::Src, lexer::*};
+use arcstr::ArcStr;
 use miette::{bail, miette, LabeledSpan, Report, Result, SourceSpan};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum Term {
-    IntLiteral(String, SourceSpan),
-    StringLiteral(String, SourceSpan),
+pub enum NodeTerm {
+    IntLiteral(ArcStr),
+    StringLiteral(ArcStr),
 }
 
-impl From<Term> for SourceSpan {
-    fn from(value: Term) -> Self {
-        match value {
-            Term::IntLiteral(_, p) => p,
-            Term::StringLiteral(_, p) => p,
-        }
-    }
-}
+pub type SrcTerm = Src<NodeTerm>;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum Expression {
-    Term(Term, SourceSpan),
+pub enum NodeExpr {
+    Term(SrcTerm),
 }
-
-impl From<Expression> for SourceSpan {
-    fn from(value: Expression) -> Self {
-        match value {
-            Expression::Term(_, s) => s,
-        }
-    }
-}
+pub type SrcExpr = Src<NodeExpr>;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum Builtin {
-    Exit(Expression, SourceSpan),
-    Print(Expression, SourceSpan),
+pub enum NodeBuiltin {
+    Exit(SrcExpr),
+    Print(SrcExpr),
 }
-
-impl From<Builtin> for SourceSpan {
-    fn from(value: Builtin) -> Self {
-        match value {
-            Builtin::Exit(_, s) => s,
-            Builtin::Print(_, s) => s,
-        }
-    }
-}
+pub type SrcBuiltin = Src<NodeBuiltin>;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum Statement {
-    Builtin(Builtin, SourceSpan),
+pub enum NodeStmt {
+    Builtin(SrcBuiltin),
 }
-impl From<Statement> for SourceSpan {
-    fn from(value: Statement) -> Self {
-        match value {
-            Statement::Builtin(_, s) => s,
-        }
-    }
-}
+pub type SrcStmt = Src<NodeStmt>;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct Program(pub Vec<Statement>);
+pub struct Program(pub Vec<SrcStmt>);
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct Parser<'a> {
-    tokens: &'a Vec<(Token, usize)>,
-    source: Arc<str>,
+    tokens: &'a Vec<SrcToken>,
+    source: ArcStr,
     cursor: RefCell<usize>,
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(tokens: &'a Vec<(Token, usize)>, source: &str) -> Self {
+    pub fn new<S: Into<ArcStr>>(tokens: &'a Vec<SrcToken>, source: S) -> Self {
         Self {
             tokens,
             source: source.into(),
@@ -77,8 +50,12 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(&self) -> Result<Program> {
-        let mut statements: Vec<Statement> = vec![];
+    pub fn parse<S: Into<ArcStr>>(tokens: &'a Vec<SrcToken>, source: S) -> Result<Program> {
+        Self::new(tokens, source).run()
+    }
+
+    pub fn run(&self) -> Result<Program> {
+        let mut statements: Vec<SrcStmt> = vec![];
 
         while let Some(statement) = self.parse_statement()? {
             statements.push(statement)
@@ -87,28 +64,30 @@ impl<'a> Parser<'a> {
         Ok(Program(statements))
     }
 
-    fn parse_statement(&self) -> Result<Option<Statement>> {
+    fn parse_statement(&self) -> Result<Option<SrcStmt>> {
         if let Some(builtin) = self.parse_builtin()? {
-            let (semi, semi_pos) = self.try_consume(&Token::Semicolon)?;
-            let start = SourceSpan::from(builtin.clone()).offset();
-            Ok(Some(Statement::Builtin(
-                builtin,
-                (start..(semi_pos + semi.len())).into(),
-            )))
+            let semi = self.try_consume(&Token::Semicolon)?;
+            let span = builtin.to(semi);
+            Ok(Some(Src::new(NodeStmt::Builtin(builtin), span)))
         } else if let Some(token) = self.peek() {
-            bail!("Unexpected token {:?}", token)
+            bail!(self.error_at(
+                token,
+                "unexpected:token".into(),
+                Some(format!("Unexpected token ({})", **token)),
+                None,
+            ))
         } else {
             Ok(None)
         }
     }
 
-    fn parse_builtin(&self) -> Result<Option<Builtin>> {
-        let Some((token, pos)) = self.peek() else {
+    fn parse_builtin(&self) -> Result<Option<SrcBuiltin>> {
+        let Some(token) = self.peek() else {
             return Ok(None);
         };
-        match token {
-            Token::Keyword(keyword) => match keyword {
-                Keyword::Exit => {
+        match token.inner() {
+            Token::Ident(keyword) => match keyword.as_str() {
+                "exit" => {
                     self.advance();
                     let prev = self.try_consume(&Token::OpenParen)?;
                     let expression = self.parse_expression().ok_or(self.error_at(
@@ -117,15 +96,13 @@ impl<'a> Parser<'a> {
                         Some("Expression expected"),
                         None,
                     ))?;
-                    let (close_paren, close_paren_pos) = self.try_consume(&Token::CloseParen)?;
+                    let builtin_exit = NodeBuiltin::Exit(expression);
 
-                    let builtin_exit = Builtin::Exit(
-                        expression,
-                        (*pos..(close_paren_pos + close_paren.len())).into(),
-                    );
-                    Ok(Some(builtin_exit))
+                    let close_paren = self.try_consume(&Token::CloseParen)?;
+
+                    Ok(Some(Src::new(builtin_exit, token.to(close_paren))))
                 }
-                Keyword::Print => {
+                "print" => {
                     self.advance();
 
                     let prev = self.try_consume(&Token::OpenParen)?;
@@ -136,58 +113,55 @@ impl<'a> Parser<'a> {
                         None,
                     ))?;
 
-                    let (close_paren, close_paren_pos) = self.try_consume(&Token::CloseParen)?;
-                    let builtin_print = Builtin::Print(
-                        expression,
-                        (*pos..(close_paren_pos + close_paren.len())).into(),
-                    );
-                    Ok(Some(builtin_print))
+                    let close_paren = self.try_consume(&Token::CloseParen)?;
+                    let builtin_print = NodeBuiltin::Print(expression);
+                    Ok(Some(Src::new(builtin_print, token.to(close_paren))))
                 }
+                _ => Ok(None),
             },
             _ => Ok(None),
         }
     }
 
-    fn parse_expression(&self) -> Option<Expression> {
+    fn parse_expression(&self) -> Option<SrcExpr> {
         let term = self.parse_term()?;
-        Some(Expression::Term(term.clone(), term.into()))
+        Some(Src::new(NodeExpr::Term(term.clone()), term))
     }
 
-    fn parse_term(&self) -> Option<Term> {
-        let (token, pos) = self.peek()?;
-        match token {
+    fn parse_term(&self) -> Option<SrcTerm> {
+        let token = self.peek()?;
+        match token.inner() {
             Token::IntLiteral(value) => {
                 self.advance();
-                Some(Term::IntLiteral(value.clone(), token.span(*pos)))
+                Some(Src::new(NodeTerm::IntLiteral(value.clone()), token))
             }
             Token::StringLiteral(value) => {
                 self.advance();
-                Some(Term::StringLiteral(value.clone(), token.span(*pos)))
+                Some(Src::new(NodeTerm::StringLiteral(value.clone()), token))
             }
             _ => None,
         }
     }
 
-    fn try_consume(&self, token: &Token) -> Result<&(Token, usize)> {
+    fn try_consume(&self, ttype: &Token) -> Result<&SrcToken> {
         match self.consume() {
-            Some(tuple) if &tuple.0 == token => Ok(tuple),
+            Some(token) if &**token == ttype => Ok(token),
             Some(t) => bail!(self.error_at(
                 t,
                 "unexpected:token".into(),
-                Some(format!("Expected token '{}', got '{}'", token, t.0)),
+                Some(format!("Expected token ({}), got ({})", ttype, **t)),
                 None
             )),
             None => bail!(self.error(
-                self.pos(),
-                0,
+                (self.source.len(), 0),
                 "unexpected:eof".into(),
-                Some(format!("Expected token '{}', got 'EOF'", token)),
+                Some(format!("Expected token ({}), got EOF", ttype)),
                 None
             )),
         }
     }
 
-    fn consume(&self) -> Option<&(Token, usize)> {
+    fn consume(&self) -> Option<&SrcToken> {
         let token = self.tokens.get(self.pos());
         self.advance();
         token
@@ -201,11 +175,11 @@ impl<'a> Parser<'a> {
         *self.cursor.borrow_mut() += amount;
     }
 
-    fn peek(&self) -> Option<&(Token, usize)> {
+    fn peek(&self) -> Option<&SrcToken> {
         self.peek_ahead(0)
     }
 
-    fn peek_ahead(&self, offset: usize) -> Option<&(Token, usize)> {
+    fn peek_ahead(&self, offset: usize) -> Option<&SrcToken> {
         self.tokens.get(self.pos() + offset)
     }
 
@@ -215,19 +189,17 @@ impl<'a> Parser<'a> {
 
     fn error_at<S: Into<String>>(
         &self,
-        token: &(Token, usize),
+        token: &Src<Token>,
         code: S,
         label: Option<S>,
         help: Option<S>,
     ) -> Report {
-        let (token, pos) = token;
-        self.error(*pos, token.to_string().len(), code, label, help)
+        self.error(token, code, label, help)
     }
 
-    fn error<S: Into<String>>(
+    fn error<S: Into<String>, SP: Into<SourceSpan>>(
         &self,
-        pos: usize,
-        len: usize,
+        span: SP,
         code: S,
         label: Option<S>,
         help: Option<S>,
@@ -237,16 +209,22 @@ impl<'a> Parser<'a> {
                 // severity = Severity::Error,
                 code = code,
                 help = help.into(),
-                labels = vec![LabeledSpan::new(label.map(Into::into), pos, len)],
+                labels = vec![LabeledSpan::new_with_span(
+                    label.map(Into::into),
+                    span.into()
+                )],
                 "Error parsing source code."
             ),
             None => miette!(
                 // severity = Severity::Error,
                 code = code,
-                labels = vec![LabeledSpan::new(label.map(Into::into), pos, len)],
+                labels = vec![LabeledSpan::new_with_span(
+                    label.map(Into::into),
+                    span.into()
+                )],
                 "Error parsing source code."
             ),
         }
-        .with_source_code(self.source.clone())
+        .with_source_code(self.source.to_string())
     }
 }

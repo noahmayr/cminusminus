@@ -1,12 +1,13 @@
-use std::{fmt::Display, sync::Arc};
+use std::fmt::Display;
 
-use crate::parser::{Builtin, Expression, Program, Statement, Term};
+use crate::{context::Src, parser::*};
+use arcstr::ArcStr;
 use miette::{bail, miette, LabeledSpan, Report, Result, SourceSpan};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Addr {
     Ptr(usize),
-    Label(String),
+    Label(ArcStr),
 }
 
 impl From<Addr> for Data {
@@ -38,11 +39,11 @@ impl From<usize> for Data {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Type {
-    Int(String),
+    Int(ArcStr),
     String { addr: Addr, len: usize },
 }
 
-pub struct TypeWithSpan(Type, SourceSpan);
+pub type SrcType = Src<Type>;
 
 impl Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -118,13 +119,13 @@ impl From<&Syscall> for usize {
 #[derive(PartialEq, Eq, Debug)]
 pub struct Generator<'a> {
     program: &'a Program,
-    source: Arc<str>,
+    source: ArcStr,
     output: String,
-    string_lits: Vec<String>,
+    string_lits: Vec<ArcStr>,
 }
 
 impl<'a> Generator<'a> {
-    pub fn new<S: Into<Arc<str>>>(program: &'a Program, source: S) -> Self {
+    pub fn new<S: Into<ArcStr>>(program: &'a Program, source: S) -> Self {
         Self {
             program,
             source: source.into(),
@@ -133,68 +134,69 @@ impl<'a> Generator<'a> {
         }
     }
 
-    pub fn generate(&mut self) -> Result<String> {
+    pub fn generate<S: Into<ArcStr>>(program: &'a Program, source: S) -> Result<String> {
+        Self::new(program, source).run()
+    }
+
+    pub fn run(&mut self) -> Result<String> {
         self.push_line(".global _start");
         self.push_line(".align 2\n");
         self.push_line("_start:");
         for statement in self.program.0.iter() {
             self.generate_statement(statement)?
         }
-        if let Some(&Statement::Builtin(Builtin::Exit(_, _), _)) = self.program.0.last() {
-        } else {
-            self.generate_statement(&Statement::Builtin(
-                Builtin::Exit(
-                    Expression::Term(Term::IntLiteral("0".into(), (0, 0).into()), (0, 0).into()),
-                    (0, 0).into(),
-                ),
-                (0, 0).into(),
-            ))?;
-        }
+        self.generate_statement(&Src::void(NodeStmt::Builtin(Src::void(NodeBuiltin::Exit(
+            Src::void(NodeExpr::Term(Src::void(NodeTerm::IntLiteral("0".into())))),
+        )))))?;
+
         self.push_line("");
         self.generate_string_literals();
         Ok(self.output.clone())
     }
 
-    fn generate_statement(&mut self, statement: &Statement) -> Result<()> {
-        match statement {
-            Statement::Builtin(builtin, _) => self.generate_bultin(builtin)?,
+    fn generate_statement(&mut self, statement: &SrcStmt) -> Result<()> {
+        match statement.inner() {
+            NodeStmt::Builtin(builtin) => self.generate_bultin(builtin)?,
         };
         Ok(())
     }
 
-    fn generate_bultin(&mut self, builtin: &Builtin) -> Result<()> {
-        match builtin {
-            Builtin::Exit(expression, _) => {
-                match self.generate_expression(expression) {
-                    TypeWithSpan(Type::Int(value), _) => self.push_syscall(Syscall::Exit {
+    fn generate_bultin(&mut self, builtin: &SrcBuiltin) -> Result<()> {
+        match builtin.inner() {
+            NodeBuiltin::Exit(expression) => {
+                let expr = self.generate_expression(expression);
+                let span = expr.span();
+
+                match expr.inner() {
+                    Type::Int(value) => self.push_syscall(Syscall::Exit {
                         code: value.parse().unwrap(),
                     }),
-                    TypeWithSpan(t, span) => bail!(self.error(
-                        span,
+                    t => bail!(self.error(
+                        *span,
                         "type_error".into(),
                         Some(format!(
-                            "Unsupported type '{}' used in exit(), int expected",
+                            "Unsupported type {} used in exit(), int expected",
                             t
                         )),
                         None
                     )),
                 };
             }
-            Builtin::Print(expression, _) => {
-                match self.generate_expression(expression) {
-                    TypeWithSpan(Type::String { addr, len }, _) => {
-                        self.push_syscall(Syscall::Write {
-                            fd: FileDescriptor::stdout(),
-                            buf: addr,
-                            bytes: len,
-                        })
-                    }
-                    TypeWithSpan(t, span) => {
+            NodeBuiltin::Print(expression) => {
+                let expr = self.generate_expression(expression);
+                let span = expr.span();
+                match expr.inner() {
+                    Type::String { addr, len } => self.push_syscall(Syscall::Write {
+                        fd: FileDescriptor::stdout(),
+                        buf: addr.clone(),
+                        bytes: *len,
+                    }),
+                    t => {
                         bail!(self.error(
-                            span,
+                            *span,
                             "type_error".into(),
                             Some(format!(
-                                "Unsupported type '{}' used in print(), string expected",
+                                "Unsupported type {} used in print(), string expected",
                                 t
                             )),
                             None
@@ -206,16 +208,16 @@ impl<'a> Generator<'a> {
         Ok(())
     }
 
-    fn generate_expression(&mut self, expression: &Expression) -> TypeWithSpan {
-        match expression {
-            Expression::Term(term, _) => self.generate_term(term),
+    fn generate_expression(&mut self, expression: &SrcExpr) -> SrcType {
+        match expression.inner() {
+            NodeExpr::Term(term) => self.generate_term(term),
         }
     }
 
-    fn generate_term(&mut self, term: &Term) -> TypeWithSpan {
-        match term {
-            Term::IntLiteral(value, span) => TypeWithSpan(Type::Int(value.clone()), *span),
-            Term::StringLiteral(value, span) => {
+    fn generate_term(&mut self, term: &SrcTerm) -> SrcType {
+        match term.inner() {
+            NodeTerm::IntLiteral(value) => Src::new(Type::Int(value.clone()), term),
+            NodeTerm::StringLiteral(value) => {
                 let label = match self.string_lits.iter().position(|it| it == value) {
                     Some(index) => str_label(index),
                     None => {
@@ -225,12 +227,12 @@ impl<'a> Generator<'a> {
                     }
                 };
 
-                TypeWithSpan(
+                Src::new(
                     Type::String {
                         addr: Addr::Label(label),
                         len: value.as_bytes().len(),
                     },
-                    *span,
+                    term,
                 )
             }
         }
@@ -278,10 +280,10 @@ impl<'a> Generator<'a> {
         self.output.push_str(format!("{}\n", line).as_str())
     }
 
-    fn error<S: Into<String>>(
+    fn error<S: Into<String>, SP: Into<SourceSpan>>(
         &self,
 
-        span: SourceSpan,
+        span: SP,
         code: S,
         label: Option<S>,
         help: Option<S>,
@@ -291,20 +293,26 @@ impl<'a> Generator<'a> {
                 // severity = Severity::Error,
                 code = code,
                 help = help.into(),
-                labels = vec![LabeledSpan::new_with_span(label.map(Into::into), span)],
+                labels = vec![LabeledSpan::new_with_span(
+                    label.map(Into::into),
+                    span.into()
+                )],
                 "Type Error"
             ),
             None => miette!(
                 // severity = Severity::Error,
                 code = code,
-                labels = vec![LabeledSpan::new_with_span(label.map(Into::into), span)],
+                labels = vec![LabeledSpan::new_with_span(
+                    label.map(Into::into),
+                    span.into()
+                )],
                 "Type Error"
             ),
         }
-        .with_source_code(self.source.clone())
+        .with_source_code(self.source.to_string())
     }
 }
 
-fn str_label(index: usize) -> String {
-    format!("str_{}", index)
+fn str_label(index: usize) -> ArcStr {
+    format!("str_{}", index).into()
 }
