@@ -1,28 +1,20 @@
-use arcstr::ArcStr;
-use miette::{bail, miette, LabeledSpan, Report, Result};
-use std::{cell::RefCell, fmt::Display};
+use arcstr::{ArcStr, Substr};
+use miette::{MietteDiagnostic, Result};
+use std::{cell::RefCell, fmt::Display, rc::Rc};
 
-use crate::context::Src;
-
-type Str = ArcStr;
+use crate::context::*;
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Token {
-    IntLiteral(Str),
-    StringLiteral(Str),
-    Ident(Str),
+    IntLiteral(ArcStr),
+    StringLiteral(ArcStr),
+    Ident(ArcStr),
     // Let,
     OpenParen,
     CloseParen,
     Semicolon,
     // Equals,
 }
-
-// impl Token {
-//     pub fn span(&self, pos: usize) -> SourceSpan {
-//         (pos, self.to_string().len()).into()
-//     }
-// }
 
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -46,20 +38,20 @@ impl Display for Token {
 pub type SrcToken = Src<Token>;
 
 pub struct Lexer {
-    source: Str,
+    context: Rc<Context>,
     cursor: RefCell<usize>,
 }
 
 impl Lexer {
-    pub fn new<S: Into<Str>>(source: S) -> Self {
+    pub fn new(context: Rc<Context>) -> Self {
         Self {
-            source: source.into(),
+            context,
             cursor: RefCell::new(0),
         }
     }
 
-    pub fn tokenize<S: Into<Str>>(source: S) -> Result<Vec<SrcToken>> {
-        Lexer::new(source).run()
+    pub fn tokenize(context: Rc<Context>) -> Result<Vec<SrcToken>> {
+        Lexer::new(context).run()
     }
 
     pub fn run(&self) -> Result<Vec<SrcToken>> {
@@ -67,14 +59,14 @@ impl Lexer {
         while let Some((ch, pos)) = self.peek() {
             if let Some(buf) = self.consume_slice_after(char::is_alphabetic, char::is_alphanumeric)
             {
-                let token = match buf {
+                let token = match &buf {
                     // "let" => Token::Let,
-                    ident => Token::Ident(ident.into()),
+                    ident => Token::Ident(ident.as_str().into()),
                 };
                 tokens.push(Src::new(token, (pos, buf.len())));
             } else if let Some(value) = self.consume_slice(|ch| ch.is_ascii_digit()) {
                 tokens.push(Src::new(
-                    Token::IntLiteral(value.into()),
+                    Token::IntLiteral(value.as_str().into()),
                     (pos, value.len()),
                 ));
             } else if self.consume_slice(char::is_whitespace).is_some() {
@@ -84,7 +76,11 @@ impl Lexer {
                 self.advance();
                 loop {
                     let Some((ch, _)) = self.peek() else {
-                        bail!(self.error_at(*self.cursor.borrow(), "unexpected_eof_in_string", Some("Unexpected end of file while parsing string"), None));
+                        self.context.error(LexerError::UnexpectedEofInString {
+                            start: pos,
+                            eof: self.context.src().len(),
+                        });
+                        break;
                     };
                     match ch {
                         '"' => {
@@ -108,66 +104,30 @@ impl Lexer {
                 }
                 let span = (pos, buf.len());
                 tokens.push(Src::new(Token::StringLiteral(buf.into()), span))
-            } else {
-                tokens.push(Src::new(
-                    match ch {
-                        '(' => Token::OpenParen,
-                        ')' => Token::CloseParen,
-                        ';' => Token::Semicolon,
-                        // '=' => Token::Equals,
-                        unknown => bail!(self.error_at(
-                            pos,
-                            "unexpected_symbol".into(),
-                            Some(format!("Unexpected symbol '{}'", unknown)),
-                            None
-                        )),
-                    },
-                    (pos, 1),
-                ));
+            } else if let Some(token) = match ch {
+                '(' => Some(Token::OpenParen),
+                ')' => Some(Token::CloseParen),
+                ';' => Some(Token::Semicolon),
+                // '=' => Token::Equals,
+                unknown => {
+                    self.context.error(LexerError::UnexpectedSymbol {
+                        pos: pos,
+                        symbol: ch,
+                    });
+                    self.advance();
+                    continue;
+                }
+            } {
+                tokens.push(Src::new(token, (pos, 1)));
                 self.advance();
             }
         }
+
         *self.cursor.borrow_mut() = 0;
-        Ok(tokens)
+        self.context.result(tokens)
     }
 
-    fn error_at<S: Into<String>>(
-        &self,
-        pos: usize,
-        code: S,
-        label: Option<S>,
-        help: Option<S>,
-    ) -> Report {
-        self.error(pos, 0, code, label, help)
-    }
-
-    fn error<S: Into<String>>(
-        &self,
-        pos: usize,
-        len: usize,
-        code: S,
-        label: Option<S>,
-        help: Option<S>,
-    ) -> Report {
-        match help {
-            Some(help) => miette!(
-                // severity = Severity::Error,
-                code = code,
-                help = help.into(),
-                labels = vec![LabeledSpan::new(label.map(Into::into), pos, len)],
-                "Error lexing source code."
-            ),
-            None => miette!(
-                // severity = Severity::Error,
-                code = code,
-                labels = vec![LabeledSpan::new(label.map(Into::into), pos, len)],
-                "Error lexing source code."
-            ),
-        }
-        .with_source_code(self.source.to_string())
-    }
-
-    fn consume_slice_after<S, R>(&self, predicate_start: S, predicate_rest: R) -> Option<&str>
+    fn consume_slice_after<S, R>(&self, predicate_start: S, predicate_rest: R) -> Option<Substr>
     where
         S: Fn(char) -> bool,
         R: Fn(char) -> bool,
@@ -187,14 +147,15 @@ impl Lexer {
         }
         self.advance_by(offset);
 
-        let result = &self.source[pos..(pos + offset)];
+        let result = self.context.src().substr(pos..(pos + offset));
+
         if !result.is_empty() {
             return Some(result);
         }
         None
     }
 
-    fn consume_slice<P>(&self, predicate: P) -> Option<&str>
+    fn consume_slice<P>(&self, predicate: P) -> Option<Substr>
     where
         P: Fn(char) -> bool,
     {
@@ -215,10 +176,35 @@ impl Lexer {
 
     fn peek_ahead(&self, offset: usize) -> Option<(char, usize)> {
         let pos = self.pos() + offset;
-        self.source.chars().nth(pos).map(|char| (char, pos))
+        self.context.src().chars().nth(pos).map(|char| (char, pos))
     }
 
     fn pos(&self) -> usize {
         *self.cursor.borrow()
+    }
+}
+
+#[derive(Debug)]
+enum LexerError {
+    UnexpectedEofInString { start: usize, eof: usize },
+    UnexpectedSymbol { pos: usize, symbol: char },
+}
+
+impl From<LexerError> for MietteDiagnostic {
+    fn from(value: LexerError) -> Self {
+        match value {
+            LexerError::UnexpectedEofInString { start, eof } => {
+                MietteDiagnostic::new("Unexpected EOF in string")
+                    .with_code("cmm::lexer::unexpected_eof_in_string")
+                    .add_label("start of string", start)
+                    .add_label("end of file", eof - 1)
+            }
+
+            LexerError::UnexpectedSymbol { pos, symbol } => {
+                MietteDiagnostic::new(format!("Unexpected symbol: {}", symbol))
+                    .with_code("cmm::lexer::unexpected_symbol")
+                    .add_label(format!("Unexpected symbol: {}", symbol), pos)
+            }
+        }
     }
 }
