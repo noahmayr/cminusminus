@@ -10,14 +10,17 @@ object_path := exec_path + ".o"
 default:
   @-just example=`ls {{example_dir}} | fzf` run
 
-run: link
+run: assemble  build link  exec
+build_run:   build link  exec
+
+exec:
   {{exec_path}}
 
-link: build
+link:
   @echo Linking {{example}}
   @ld -macosx_version_min 13.0.0 -o {{exec_path}} {{object_path}} -lSystem -syslibroot `xcrun -sdk macosx --show-sdk-path` -e _start -arch arm64
   
-build: assemble
+build:
   @echo Building {{example}}
   @as {{asm_path}} -o {{object_path}}
 

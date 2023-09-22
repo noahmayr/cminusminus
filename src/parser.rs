@@ -8,6 +8,7 @@ use miette::{MietteDiagnostic, Result, SourceSpan};
 pub enum NodeTerm {
     IntLiteral(ArcStr),
     StringLiteral(ArcStr),
+    Var(ArcStr),
 }
 
 pub type SrcTerm = Src<NodeTerm>;
@@ -28,6 +29,7 @@ pub type SrcBuiltin = Src<NodeBuiltin>;
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum NodeStmt {
     Builtin(SrcBuiltin),
+    Let { ident: ArcStr, expr: SrcExpr },
 }
 pub type SrcStmt = Src<NodeStmt>;
 
@@ -66,11 +68,54 @@ impl<'a> Parser<'a> {
 
     fn parse_statement(&self) -> Result<Option<SrcStmt>> {
         if let Some(builtin) = self.parse_builtin()? {
-            let Some(semi) = self.try_consume(&Token::Semicolon)? else {
+            let Some(semi) = self.consume_or_fail(&Token::Semicolon)? else {
                 return Ok(None);
             };
             let span = builtin.to(semi);
             Ok(Some(Src::new(NodeStmt::Builtin(builtin), span)))
+        } else if let Some(token_let) = self.try_consume(&Token::Let) {
+            let ident = self.peek();
+            let ident = match ident {
+                None => {
+                    self.context.error(ParserError::UnexpectedEof {
+                        expected: Token::Ident("some_identifier".into()),
+                        eof: self.context.eof(),
+                    });
+                    return Ok(None);
+                }
+                Some(ident) => {
+                    let Token::Ident(ident) = ident.inner() else {
+self.context.error(ParserError::UnexpectedEof {
+                        expected: Token::Ident("placeholder".into()),
+                        eof:  self.context.eof(),
+                    });
+                        return Ok(None);
+
+                    };
+                    ident
+                }
+            };
+            self.advance();
+            let Some(eq) = self.consume_or_fail(&Token::Equals)? else {
+                return Ok(None);
+            };
+            let Some(expr) = self.parse_expression() else {
+                        self.context.error(ParserError::ExpressionExpected {
+                    after: token_let.to(eq),
+                });
+                return Ok(None);
+            };
+            let Some(semi) = self.consume_or_fail(&Token::Semicolon)? else {
+                return Ok(None);
+            };
+            let span = token_let.to(semi);
+            Ok(Some(Src::new(
+                NodeStmt::Let {
+                    ident: ident.clone(),
+                    expr,
+                },
+                span,
+            )))
         } else if let Some(token) = self.peek() {
             self.context.error(ParserError::UnexpectedToken {
                 token: token.clone(),
@@ -90,7 +135,7 @@ impl<'a> Parser<'a> {
             Token::Ident(keyword) => match keyword.as_str() {
                 "exit" => {
                     self.advance();
-                    let Some(prev) = self.try_consume(&Token::OpenParen)? else {
+                    let Some(prev) = self.consume_or_fail(&Token::OpenParen)? else {
                         return Ok(None);
                     };
                     let Some(expression) = self.parse_expression() else {
@@ -101,7 +146,7 @@ impl<'a> Parser<'a> {
                     };
                     let builtin_exit = NodeBuiltin::Exit(expression);
 
-                    let Some(close_paren) = self.try_consume(&Token::CloseParen)? else {
+                    let Some(close_paren) = self.consume_or_fail(&Token::CloseParen)? else {
                         return Ok(None);
                     };
 
@@ -110,7 +155,7 @@ impl<'a> Parser<'a> {
                 "print" => {
                     self.advance();
 
-                    let Some(prev) = self.try_consume(&Token::OpenParen)? else {
+                    let Some(prev) = self.consume_or_fail(&Token::OpenParen)? else {
                         return Ok(None);
                     };
                     let Some(expression) = self.parse_expression() else {
@@ -120,7 +165,7 @@ impl<'a> Parser<'a> {
                         return Ok(None);
                     };
 
-                    let Some(close_paren) = self.try_consume(&Token::CloseParen)? else {
+                    let Some(close_paren) = self.consume_or_fail(&Token::CloseParen)? else {
                         return Ok(None);
                     };
 
@@ -149,21 +194,35 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Some(Src::new(NodeTerm::StringLiteral(value.clone()), token))
             }
+            Token::Ident(name) => {
+                self.advance();
+                Some(Src::new(NodeTerm::Var(name.clone()), token))
+            }
             _ => None,
         }
     }
 
-    fn try_consume(&self, expected: &Token) -> Result<Option<&SrcToken>> {
+    fn try_consume(&self, expected: &Token) -> Option<&SrcToken> {
+        let token = self.peek()?;
+        if token.inner() == expected {
+            self.advance();
+            Some(token)
+        } else {
+            None
+        }
+    }
+
+    fn consume_or_fail(&self, expected: &Token) -> Result<Option<&SrcToken>> {
         match self.consume() {
             None => {
                 self.context.error(ParserError::UnexpectedEof {
                     expected: expected.clone(),
-                    eof: self.context.src().len(),
+                    eof: self.context.eof(),
                 });
                 Ok(None)
             }
             Some(actual) => {
-                if &**actual != expected {
+                if actual.inner() != expected {
                     self.context.error(ParserError::ExpectedToken {
                         expected: expected.clone(),
                         actual: actual.clone(),

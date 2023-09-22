@@ -146,6 +146,10 @@ impl Context {
         self.src.clone()
     }
 
+    pub fn eof(&self) -> usize {
+        self.src.len() - 1
+    }
+
     pub fn fail(&self) -> ContextError {
         ContextError {
             miette_src: NamedSource::new(self.name.to_string(), self.src.to_string()),

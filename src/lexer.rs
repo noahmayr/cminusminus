@@ -9,11 +9,11 @@ pub enum Token {
     IntLiteral(ArcStr),
     StringLiteral(ArcStr),
     Ident(ArcStr),
-    // Let,
+    Let,
     OpenParen,
     CloseParen,
     Semicolon,
-    // Equals,
+    Equals,
 }
 
 impl Display for Token {
@@ -22,14 +22,14 @@ impl Display for Token {
             f,
             "{}",
             match self {
-                // Token::Let => "let",
+                Token::Let => "let".to_string(),
                 Token::IntLiteral(value) => format!("int '{}'", value),
                 Token::StringLiteral(value) => format!("string '{}'", value),
                 Token::Ident(name) => format!("ident '{}'", name),
                 Token::OpenParen => "(".to_string(),
                 Token::CloseParen => ")".to_string(),
                 Token::Semicolon => ";".to_string(),
-                // Token::Equals => "=",
+                Token::Equals => "=".to_string(),
             },
         )
     }
@@ -57,11 +57,12 @@ impl Lexer {
     pub fn run(&self) -> Result<Vec<SrcToken>> {
         let mut tokens: Vec<SrcToken> = vec![];
         while let Some((ch, pos)) = self.peek() {
-            if let Some(buf) = self.consume_slice_after(char::is_alphabetic, char::is_alphanumeric)
+            if let Some(buf) = self
+                .consume_slice_after(char::is_alphabetic, |ch| ch.is_alphanumeric() || ch == '_')
             {
-                let token = match &buf {
-                    // "let" => Token::Let,
-                    ident => Token::Ident(ident.as_str().into()),
+                let token = match buf.as_str() {
+                    "let" => Token::Let,
+                    ident => Token::Ident(ident.into()),
                 };
                 tokens.push(Src::new(token, (pos, buf.len())));
             } else if let Some(value) = self.consume_slice(|ch| ch.is_ascii_digit()) {
@@ -108,6 +109,7 @@ impl Lexer {
                 '(' => Some(Token::OpenParen),
                 ')' => Some(Token::CloseParen),
                 ';' => Some(Token::Semicolon),
+                '=' => Some(Token::Equals),
                 // '=' => Token::Equals,
                 unknown => {
                     self.context.error(LexerError::UnexpectedSymbol {

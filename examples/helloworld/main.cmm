@@ -1,3 +1,10 @@
-print("hello world\n");
-print("Hello world\n");
-exit("0");
+let a = 1;
+let x = "  hello world\n";
+let b = 4;
+let y = "  bye world\n";
+let c = 0;
+print("x:\n");
+print(x);
+print("y:\n");
+print(y);
+exit(b);
