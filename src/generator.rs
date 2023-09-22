@@ -29,11 +29,18 @@ pub enum Data {
     Addr(Addr),
     Value(usize),
     Stack(usize),
+    Register(Reg),
 }
 
 impl From<usize> for Data {
     fn from(val: usize) -> Self {
         Data::Value(val)
+    }
+}
+
+impl From<&Reg> for Data {
+    fn from(value: &Reg) -> Self {
+        Data::Register(value.clone())
     }
 }
 
@@ -536,6 +543,7 @@ impl<'a> Generator<'a> {
             Data::Addr(addr) => self.push_instr(format!("adr {}, {}", register, addr)),
             Data::Value(value) => self.push_instr(format!("mov {}, #{}", register, value)),
             Data::Stack(loc) => self.load_reg(register, loc),
+            Data::Register(reg) => self.push_instr(format!("mov {}, {}", register, reg)),
         }
     }
 
@@ -601,19 +609,22 @@ impl<'a> Generator<'a> {
 
     fn load_reg(&mut self, reg: &Reg, loc: usize) {
         self.push_instr(format!(
-            "ldr {}, [SP, #{}]",
+            "add {}, {}, {}",
             reg,
+            *SP,
             self.offset_from_stack_loc(loc)
         ));
+        self.push_instr(format!("ldr {}, [{}]", reg, reg,));
     }
 
     fn load_regp(&mut self, reg1: &Reg, reg2: &Reg, loc: usize) {
         self.push_instr(format!(
-            "ldp {}, {}, [SP, #{}]",
+            "add {}, {}, {}",
             reg1,
-            reg2,
+            *SP,
             self.offset_from_stack_loc(loc)
         ));
+        self.push_instr(format!("ldp {}, {}, [{}]", reg1, reg2, reg1,));
     }
 
     fn allocate_stack_loc(&mut self, size: usize) -> usize {
