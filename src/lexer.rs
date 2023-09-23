@@ -14,6 +14,8 @@ pub enum Token {
     CloseParen,
     Semicolon,
     Equals,
+    OpenCurly,
+    CloseCurly,
 }
 
 impl Display for Token {
@@ -22,14 +24,16 @@ impl Display for Token {
             f,
             "{}",
             match self {
-                Token::Let => "let".to_string(),
-                Token::IntLiteral(value) => format!("int '{}'", value),
-                Token::StringLiteral(value) => format!("string '{}'", value),
-                Token::Ident(name) => format!("ident '{}'", name),
-                Token::OpenParen => "(".to_string(),
-                Token::CloseParen => ")".to_string(),
-                Token::Semicolon => ";".to_string(),
-                Token::Equals => "=".to_string(),
+                Self::Let => "let".to_string(),
+                Self::IntLiteral(value) => format!("int '{}'", value),
+                Self::StringLiteral(value) => format!("string '{}'", value),
+                Self::Ident(name) => format!("ident '{}'", name),
+                Self::OpenParen => "(".to_string(),
+                Self::CloseParen => ")".to_string(),
+                Self::Semicolon => ";".to_string(),
+                Self::Equals => "=".to_string(),
+                Self::OpenCurly => "{".to_string(),
+                Self::CloseCurly => "}".to_string(),
             },
         )
     }
@@ -110,12 +114,11 @@ impl Lexer {
                 ')' => Some(Token::CloseParen),
                 ';' => Some(Token::Semicolon),
                 '=' => Some(Token::Equals),
-                // '=' => Token::Equals,
-                unknown => {
-                    self.context.error(LexerError::UnexpectedSymbol {
-                        pos: pos,
-                        symbol: ch,
-                    });
+                '{' => Some(Token::OpenCurly),
+                '}' => Some(Token::CloseCurly),
+                symbol => {
+                    self.context
+                        .error(LexerError::UnexpectedSymbol { pos, symbol });
                     self.advance();
                     continue;
                 }

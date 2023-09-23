@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, rc::Rc};
+use std::{fmt::Display, rc::Rc};
 
 use crate::{context::*, parser::*};
 use arcstr::ArcStr;
@@ -40,7 +40,7 @@ impl From<usize> for Data {
 
 impl From<&Reg> for Data {
     fn from(value: &Reg) -> Self {
-        Data::Register(value.clone())
+        Data::Register(*value)
     }
 }
 
@@ -74,6 +74,7 @@ impl Display for Type {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Var {
+    ident: ArcStr,
     stack_loc: usize,
     typ: Type,
 }
@@ -304,7 +305,7 @@ pub struct Generator<'a> {
     string_lits: Vec<ArcStr>,
     aligned_stack_size: usize,
     stack_size: usize,
-    vars: HashMap<ArcStr, Var>,
+    vars: Vec<Var>,
 }
 
 impl<'a> Generator<'a> {
@@ -316,7 +317,7 @@ impl<'a> Generator<'a> {
             string_lits: vec![],
             aligned_stack_size: 0,
             stack_size: 0,
-            vars: HashMap::new(),
+            vars: vec![],
         }
     }
 
@@ -344,18 +345,20 @@ impl<'a> Generator<'a> {
 
     fn generate_statement(&mut self, statement: &SrcStmt) -> Result<()> {
         let stmt_span = statement.span();
-        self.push_instr(format!(
-            "; {}",
-            self.context
+        let line = self
+            .context
                 .src()
                 .substr(stmt_span.offset()..=(stmt_span.offset() + stmt_span.len()))
-                .trim(),
-        ));
+            .trim()
+            .to_string();
+        if line.as_bytes().iter().filter(|&&c| c == b'\n').count() == 0 {
+            self.push_instr(format!("; {}", line,));
+        }
 
         match statement.inner() {
             NodeStmt::Builtin(builtin) => self.generate_bultin(builtin)?,
             NodeStmt::Let { ident, expr } => {
-                let old_type = self.vars.get(ident).map(|v| v.typ.clone());
+                let old_type = self.get_var(ident).map(|v| v.typ.clone());
                 let Some(expr) = self.generate_expression(expr) else {return Ok(());};
                 match expr.inner() {
                     TypedExpr::IntLit(value) => {
@@ -369,9 +372,17 @@ impl<'a> Generator<'a> {
                         }
                         self.load_register(&X0, value.parse::<usize>().unwrap());
                         let stack_loc = self.push_reg(&X0);
-                        self.vars.insert(ident.clone(), Var { stack_loc, typ });
+                        self.vars.push(Var {
+                            ident: ident.clone(),
+                            stack_loc,
+                            typ,
+                        });
                     }
-                    TypedExpr::Var(Var { typ, stack_loc }) => {
+                    TypedExpr::Var(Var {
+                        ident: _,
+                        typ,
+                        stack_loc,
+                    }) => {
                         let stack_loc = match typ {
                             Type::Int => {
                                 self.load_reg(&X0, *stack_loc);
@@ -389,13 +400,11 @@ impl<'a> Generator<'a> {
                             });
                             return Ok(());
                         }
-                        self.vars.insert(
-                            ident.clone(),
-                            Var {
+                        self.vars.push(Var {
+                            ident: ident.clone(),
                                 stack_loc,
                                 typ: typ.clone(),
-                            },
-                        );
+                        });
                     }
                     TypedExpr::StringLit { addr, len } => {
                         let typ = Type::String;
@@ -410,9 +419,24 @@ impl<'a> Generator<'a> {
                         // idk why I need to subtract 2 or 3 here, but it works
                         self.load_register(&X1, *len - 2);
                         let stack_loc = self.push_regp(&X0, &X1);
-                        self.vars.insert(ident.clone(), Var { stack_loc, typ });
+                        self.vars.push(Var {
+                            ident: ident.clone(),
+                            stack_loc,
+                            typ,
+                        });
+                    }
                     }
                 }
+            NodeStmt::Scope(statements) => {
+                self.push_instr("; {");
+                let stack_size = self.stack_size;
+                let var_size = self.vars.len();
+                for statement in statements.iter() {
+                    self.generate_statement(statement)?
+                }
+                self.shrink_stack(self.stack_size - stack_size);
+                self.vars.truncate(var_size);
+                self.push_instr("; }");
             }
         };
         Ok(())
@@ -428,6 +452,7 @@ impl<'a> Generator<'a> {
                         code: value.parse().unwrap(),
                     }),
                     TypedExpr::Var(Var {
+                        ident: _,
                         typ: Type::Int,
                         stack_loc,
                     }) => {
@@ -453,6 +478,7 @@ impl<'a> Generator<'a> {
                         bytes: *len - 2,
                     }),
                     TypedExpr::Var(Var {
+                        ident: _,
                         typ: Type::String,
                         stack_loc,
                     }) => {
@@ -501,7 +527,7 @@ impl<'a> Generator<'a> {
                 )
             }
             NodeTerm::Var(name) => {
-                let Some(var) = self.vars.get(name) else {
+                let Some(var) = self.get_var(name) else {
                     self.context.error(GenerationError::UndefinedVariable { term: term.clone(), name: name.clone() });
                     return None;
                 };
@@ -642,6 +668,10 @@ impl<'a> Generator<'a> {
 
     fn push_line<S: Display>(&mut self, line: S) {
         self.output.push_str(format!("{}\n", line).as_str())
+    }
+
+    fn get_var(&self, name: &ArcStr) -> Option<&Var> {
+        self.vars.iter().rev().find(|var| &var.ident == name)
     }
 }
 

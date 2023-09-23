@@ -30,6 +30,7 @@ pub type SrcBuiltin = Src<NodeBuiltin>;
 pub enum NodeStmt {
     Builtin(SrcBuiltin),
     Let { ident: ArcStr, expr: SrcExpr },
+    Scope(Vec<SrcStmt>),
 }
 pub type SrcStmt = Src<NodeStmt>;
 
@@ -116,6 +117,21 @@ self.context.error(ParserError::UnexpectedEof {
                 },
                 span,
             )))
+        } else if let Some(start) = self.try_consume(&Token::OpenCurly) {
+            let mut statements = vec![];
+            loop {
+                if self.peek_matches(&Token::CloseCurly) {
+                    break;
+                }
+                let Some(statement) = self.parse_statement()? else {
+                    break;
+                };
+                statements.push(statement);
+            }
+            let Some(end) = self.consume_or_fail(&Token::CloseCurly)? else {
+                return Ok(None);
+            };
+            Ok(Some(Src::new(NodeStmt::Scope(statements), start.to(end))))
         } else if let Some(token) = self.peek() {
             self.context.error(ParserError::UnexpectedToken {
                 token: token.clone(),
@@ -250,6 +266,13 @@ self.context.error(ParserError::UnexpectedEof {
 
     fn peek(&self) -> Option<&SrcToken> {
         self.peek_ahead(0)
+    }
+
+    fn peek_matches(&self, token: &Token) -> bool {
+        let Some(next) = self.peek() else {
+            return false;
+        };
+        next.inner() == token
     }
 
     fn peek_ahead(&self, offset: usize) -> Option<&SrcToken> {
