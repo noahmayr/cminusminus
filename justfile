@@ -21,10 +21,10 @@ link:
   @ld -macosx_version_min 13.0.0 -o {{exec_path}} {{object_path}} -lSystem -syslibroot `xcrun -sdk macosx --show-sdk-path` -e _start -arch arm64
   
 build:
-  @echo Building {{example}}
+  @echo Assembling {{example}}
   @as {{asm_path}} -o {{object_path}}
 
 assemble:
   @mkdir -p {{out_path}}
-  @echo Assembling {{example}}
+  @echo Compiling {{example}}
   @RUSTFLAGS=-Awarnings cargo -q run {{source_path}} -o {{asm_path}}

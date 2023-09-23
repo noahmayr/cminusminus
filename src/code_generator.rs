@@ -498,16 +498,10 @@ impl<'a> Generator<'a> {
         Ok(())
     }
 
-    fn generate_expression(&mut self, expression: &SrcExpr) -> Option<SrcTypedExpr> {
-        match expression.inner() {
-            NodeExpr::Term(term) => self.generate_term(term),
-        }
-    }
-
-    fn generate_term(&mut self, term: &SrcTerm) -> Option<SrcTypedExpr> {
-        Some(match term.inner() {
-            NodeTerm::IntLiteral(value) => Src::new(TypedExpr::IntLit(value.clone()), term),
-            NodeTerm::StringLiteral(value) => {
+    fn generate_expression(&mut self, expr: &SrcExpr) -> Option<SrcTypedExpr> {
+        Some(match expr.inner() {
+            NodeExpr::IntLiteral(value) => Src::new(TypedExpr::IntLit(value.clone()), expr),
+            NodeExpr::StringLiteral(value) => {
                 let label = match self.string_lits.iter().position(|it| it == value) {
                     Some(index) => str_label(index),
                     None => {
@@ -522,15 +516,15 @@ impl<'a> Generator<'a> {
                         addr: Addr::Label(label),
                         len: value.as_bytes().len(),
                     },
-                    term,
+                    expr,
                 )
             }
-            NodeTerm::Var(name) => {
+            NodeExpr::Var(name) => {
                 let Some(var) = self.get_var(name) else {
-                    self.context.error(GenerationError::UndefinedVariable { term: term.clone(), name: name.clone() });
+                    self.context.error(GenerationError::UndefinedVariable { expr: expr.clone(), name: name.clone() });
                     return None;
                 };
-                Src::new(TypedExpr::Var(var.clone()), term)
+                Src::new(TypedExpr::Var(var.clone()), expr)
             }
         })
     }
@@ -685,7 +679,7 @@ enum GenerationError {
         expected: ArcStr,
     },
     UndefinedVariable {
-        term: SrcTerm,
+        expr: SrcExpr,
         name: ArcStr,
     },
 }
@@ -700,10 +694,10 @@ impl From<GenerationError> for MietteDiagnostic {
             ))
             .with_code("cmm::generate::type_error")
             .add_label(format!("expected {}, got {}", expected, expr.inner()), expr),
-            GenerationError::UndefinedVariable { term, name: ident } => {
+            GenerationError::UndefinedVariable { expr, name: ident } => {
                 MietteDiagnostic::new(format!("Undefined variable '{}'", ident,))
                     .with_code("cmm::generate::undefined_variable")
-                    .add_label(format!("undefined variable '{}'", ident), term)
+                    .add_label(format!("undefined variable '{}'", ident), expr)
             }
         }
     }

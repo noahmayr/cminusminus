@@ -5,17 +5,10 @@ use arcstr::ArcStr;
 use miette::{MietteDiagnostic, Result, SourceSpan};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum NodeTerm {
+pub enum NodeExpr {
     IntLiteral(ArcStr),
     StringLiteral(ArcStr),
     Var(ArcStr),
-}
-
-pub type SrcTerm = Src<NodeTerm>;
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum NodeExpr {
-    Term(SrcTerm),
 }
 pub type SrcExpr = Src<NodeExpr>;
 
@@ -195,24 +188,19 @@ self.context.error(ParserError::UnexpectedEof {
     }
 
     fn parse_expression(&self) -> Option<SrcExpr> {
-        let term = self.parse_term()?;
-        Some(Src::new(NodeExpr::Term(term.clone()), term))
-    }
-
-    fn parse_term(&self) -> Option<SrcTerm> {
         let token = self.peek()?;
         match token.inner() {
             Token::IntLiteral(value) => {
                 self.advance();
-                Some(Src::new(NodeTerm::IntLiteral(value.clone()), token))
+                Some(Src::new(NodeExpr::IntLiteral(value.clone()), token))
             }
             Token::StringLiteral(value) => {
                 self.advance();
-                Some(Src::new(NodeTerm::StringLiteral(value.clone()), token))
+                Some(Src::new(NodeExpr::StringLiteral(value.clone()), token))
             }
             Token::Ident(name) => {
                 self.advance();
-                Some(Src::new(NodeTerm::Var(name.clone()), token))
+                Some(Src::new(NodeExpr::Var(name.clone()), token))
             }
             _ => None,
         }
