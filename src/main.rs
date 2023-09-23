@@ -2,14 +2,14 @@
 use std::fs;
 use std::rc::Rc;
 
-use crate::generator::*;
+use crate::code_generator::*;
 use crate::lexer::*;
 use crate::parser::*;
 use clap::Parser as ClapParser;
 use context::Context;
 use resolve_path::PathResolveExt;
+mod code_generator;
 mod context;
-mod generator;
 mod lexer;
 mod parser;
 

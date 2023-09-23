@@ -333,9 +333,8 @@ impl<'a> Generator<'a> {
         for statement in self.program.0.iter() {
             self.generate_statement(statement)?
         }
-        self.generate_statement(&Src::void(NodeStmt::Builtin(Src::void(NodeBuiltin::Exit(
-            Src::void(NodeExpr::Term(Src::void(NodeTerm::IntLiteral("1".into())))),
-        )))))?;
+
+        self.push_syscall(Syscall::Exit { code: 0 });
 
         self.push_line("");
         self.generate_string_literals();
@@ -347,8 +346,8 @@ impl<'a> Generator<'a> {
         let stmt_span = statement.span();
         let line = self
             .context
-                .src()
-                .substr(stmt_span.offset()..=(stmt_span.offset() + stmt_span.len()))
+            .src()
+            .substr(stmt_span.offset()..=(stmt_span.offset() + stmt_span.len()))
             .trim()
             .to_string();
         if line.as_bytes().iter().filter(|&&c| c == b'\n').count() == 0 {
@@ -402,8 +401,8 @@ impl<'a> Generator<'a> {
                         }
                         self.vars.push(Var {
                             ident: ident.clone(),
-                                stack_loc,
-                                typ: typ.clone(),
+                            stack_loc,
+                            typ: typ.clone(),
                         });
                     }
                     TypedExpr::StringLit { addr, len } => {
@@ -425,8 +424,8 @@ impl<'a> Generator<'a> {
                             typ,
                         });
                     }
-                    }
                 }
+            }
             NodeStmt::Scope(statements) => {
                 self.push_instr("; {");
                 let stack_size = self.stack_size;
