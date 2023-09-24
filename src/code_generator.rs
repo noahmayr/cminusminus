@@ -1,6 +1,9 @@
 use std::{fmt::Display, rc::Rc};
 
-use crate::{context::*, parser::*};
+use crate::{
+    context::*,
+    semantics::{self, *},
+};
 use arcstr::ArcStr;
 use lazy_static::lazy_static;
 use miette::{MietteDiagnostic, Result};
@@ -45,57 +48,10 @@ impl From<&Reg> for Data {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-enum Type {
-    Int,
-    String,
-}
-
-impl Type {
-    pub fn size(&self) -> usize {
-        match self {
-            Type::Int => 8,
-            Type::String => 16,
-        }
-    }
-}
-
-impl Display for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Type::Int => "int",
-                Type::String => "string",
-            }
-        )
-    }
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Var {
     ident: ArcStr,
     stack_loc: usize,
     typ: Type,
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum TypedExpr {
-    IntLit(ArcStr),
-    Var(Var),
-    StringLit { addr: Addr, len: usize },
-}
-
-pub type SrcTypedExpr = Src<TypedExpr>;
-
-impl Display for TypedExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TypedExpr::IntLit(_) => write!(f, "int"),
-            TypedExpr::Var(var) => var.typ.fmt(f),
-            TypedExpr::StringLit { addr: _, len: _ } => write!(f, "string"),
-        }
-    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -120,20 +76,10 @@ impl From<FileDescriptor> for Data {
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Syscall {
-    Exit {
-        code: usize,
-    },
+    Exit,
     // Fork
-    Read {
-        fd: FileDescriptor,
-        buf: Addr,
-        bytes: usize,
-    },
-    Write {
-        fd: FileDescriptor,
-        buf: Addr,
-        bytes: usize,
-    },
+    Read,
+    Write,
 }
 
 impl Syscall {
@@ -145,17 +91,9 @@ impl Syscall {
 impl From<&Syscall> for usize {
     fn from(val: &Syscall) -> Self {
         match val {
-            Syscall::Exit { code: _ } => 1,
-            Syscall::Read {
-                fd: _,
-                buf: _,
-                bytes: _,
-            } => 3,
-            Syscall::Write {
-                fd: _,
-                buf: _,
-                bytes: _,
-            } => 4,
+            Syscall::Exit => 1,
+            Syscall::Read => 3,
+            Syscall::Write => 4,
         }
     }
 }
@@ -299,7 +237,7 @@ impl Display for Reg {
 
 #[derive(Debug)]
 pub struct Generator<'a> {
-    program: &'a Program,
+    ast: &'a Ast,
     context: Rc<Context>,
     output: String,
     string_lits: Vec<ArcStr>,
@@ -309,9 +247,9 @@ pub struct Generator<'a> {
 }
 
 impl<'a> Generator<'a> {
-    pub fn new(program: &'a Program, context: Rc<Context>) -> Self {
+    pub fn new(ast: &'a Ast, context: Rc<Context>) -> Self {
         Self {
-            program,
+            ast,
             context,
             output: String::new(),
             string_lits: vec![],
@@ -321,28 +259,39 @@ impl<'a> Generator<'a> {
         }
     }
 
-    pub fn generate(program: &'a Program, context: Rc<Context>) -> Result<String> {
-        Self::new(program, context).run()
+    pub fn generate(ast: &'a Ast, context: Rc<Context>) -> String {
+        Self::new(ast, context).run()
     }
 
-    pub fn run(&mut self) -> Result<String> {
+    pub fn run(&mut self) -> String {
         self.push_line(".global _start");
         self.push_line(".align 2\n");
         self.push_line("_start:");
-        // self.resize_aligned_stack(self.stack_size + 64);
-        for statement in self.program.0.iter() {
-            self.generate_statement(statement)?
-        }
+        self.generate_scope(&self.ast.0);
 
-        self.push_syscall(Syscall::Exit { code: 0 });
+        self.load_register(&X0, 0);
+        self.push_reg(&X0);
+        self.push_syscall(Syscall::Exit);
 
         self.push_line("");
         self.generate_string_literals();
 
-        self.context.result(self.output.clone())
+        self.output.clone()
     }
 
-    fn generate_statement(&mut self, statement: &SrcStmt) -> Result<()> {
+    fn generate_scope(&mut self, scope: &SrcScope) {
+        self.push_instr("; {");
+        let stack_size = self.stack_size;
+        let var_size = self.vars.len();
+        for statement in scope.statements.iter() {
+            self.generate_statement(statement)
+        }
+        self.shrink_stack(self.stack_size - stack_size);
+        self.vars.truncate(var_size);
+        self.push_instr("; }");
+    }
+
+    fn generate_statement(&mut self, statement: &SrcStmt) {
         let stmt_span = statement.span();
         let line = self
             .context
@@ -355,178 +304,91 @@ impl<'a> Generator<'a> {
         }
 
         match statement.inner() {
-            NodeStmt::Builtin(builtin) => self.generate_bultin(builtin)?,
-            NodeStmt::Let { ident, expr } => {
-                let old_type = self.get_var(ident).map(|v| v.typ.clone());
-                let Some(expr) = self.generate_expression(expr) else {return Ok(());};
-                match expr.inner() {
-                    TypedExpr::IntLit(value) => {
-                        let typ = Type::Int;
-                        if old_type.map_or(false, |old_type| old_type != typ) {
-                            self.context.error(GenerationError::TypeError {
-                                expr: expr.clone(),
-                                expected: arcstr::literal!("int"),
-                            });
-                            return Ok(());
-                        }
-                        self.load_register(&X0, value.parse::<usize>().unwrap());
+            NodeStmt::Builtin(builtin) => self.generate_bultin(builtin),
+            NodeStmt::Let { typ, ident, expr } => {
+                self.generate_expression(expr);
+
+                match typ {
+                    Type::Uint64 => {
+                        self.pop_reg(&X0);
                         let stack_loc = self.push_reg(&X0);
                         self.vars.push(Var {
                             ident: ident.clone(),
                             stack_loc,
-                            typ,
+                            typ: *typ,
                         });
                     }
-                    TypedExpr::Var(Var {
-                        ident: _,
-                        typ,
-                        stack_loc,
-                    }) => {
-                        let stack_loc = match typ {
-                            Type::Int => {
-                                self.load_reg(&X0, *stack_loc);
-                                self.push_reg(&X0)
-                            }
-                            Type::String => {
-                                self.load_regp(&X0, &X1, *stack_loc);
-                                self.push_regp(&X0, &X1)
-                            }
-                        };
-                        if old_type.map_or(false, |old_type| &old_type != typ) {
-                            self.context.error(GenerationError::TypeError {
-                                expr: expr.clone(),
-                                expected: typ.to_string().into(),
-                            });
-                            return Ok(());
-                        }
-                        self.vars.push(Var {
-                            ident: ident.clone(),
-                            stack_loc,
-                            typ: typ.clone(),
-                        });
-                    }
-                    TypedExpr::StringLit { addr, len } => {
-                        let typ = Type::String;
-                        if old_type.map_or(false, |old_type| old_type != typ) {
-                            self.context.error(GenerationError::TypeError {
-                                expr: expr.clone(),
-                                expected: arcstr::literal!("int"),
-                            });
-                            return Ok(());
-                        }
-                        self.load_register(&X0, addr.clone());
-                        // idk why I need to subtract 2 or 3 here, but it works
-                        self.load_register(&X1, *len - 2);
+                    Type::String => {
+                        self.pop_regp(&X0, &X1);
                         let stack_loc = self.push_regp(&X0, &X1);
                         self.vars.push(Var {
                             ident: ident.clone(),
                             stack_loc,
-                            typ,
+                            typ: *typ,
                         });
                     }
                 }
             }
-            NodeStmt::Scope(statements) => {
-                self.push_instr("; {");
-                let stack_size = self.stack_size;
-                let var_size = self.vars.len();
-                for statement in statements.iter() {
-                    self.generate_statement(statement)?
-                }
-                self.shrink_stack(self.stack_size - stack_size);
-                self.vars.truncate(var_size);
-                self.push_instr("; }");
+            NodeStmt::Scope(scope) => {
+                self.generate_scope(scope);
             }
         };
-        Ok(())
     }
 
-    fn generate_bultin(&mut self, builtin: &SrcBuiltin) -> Result<()> {
+    fn generate_bultin(&mut self, builtin: &SrcBuiltin) {
         match builtin.inner() {
-            NodeBuiltin::Exit(expression) => {
-                let Some(expr) = self.generate_expression(expression) else {return Ok(());};
-
-                match expr.inner() {
-                    TypedExpr::IntLit(value) => self.push_syscall(Syscall::Exit {
-                        code: value.parse().unwrap(),
-                    }),
-                    TypedExpr::Var(Var {
-                        ident: _,
-                        typ: Type::Int,
-                        stack_loc,
-                    }) => {
-                        self.load_register(&X0, Data::Stack(*stack_loc));
-                        self.load_register(&X16, 1);
-                        self.push_instr("svc 0");
-                    }
-                    _ => {
-                        self.context.error(GenerationError::TypeError {
-                            expr,
-                            expected: arcstr::literal!("int"),
-                        });
-                    }
-                };
+            NodeBuiltin::Exit(expr) => {
+                self.generate_expression(expr);
+                self.push_syscall(Syscall::Exit);
             }
-            NodeBuiltin::Print(expression) => {
-                let Some(expr) = self.generate_expression(expression) else {return Ok(());};
-                match expr.inner() {
-                    TypedExpr::StringLit { addr, len } => self.push_syscall(Syscall::Write {
-                        fd: FileDescriptor::stdout(),
-                        buf: addr.clone(),
-                        // idk why I need to subtract 2 or 3 here, but it works
-                        bytes: *len - 2,
-                    }),
-                    TypedExpr::Var(Var {
-                        ident: _,
-                        typ: Type::String,
-                        stack_loc,
-                    }) => {
-                        self.load_register(&X0, FileDescriptor::stdout());
-                        self.load_regp(&X1, &X2, *stack_loc);
-                        self.load_register(&X16, 4);
-                        self.push_instr("svc 0");
-                    }
-                    _ => {
-                        self.context.error(GenerationError::TypeError {
-                            expr,
-                            expected: arcstr::literal!("string"),
-                        });
-                    }
-                };
+            NodeBuiltin::Print(expr) => {
+                self.load_register(&X0, FileDescriptor::stdout());
+                self.push_reg(&X0);
+                self.generate_expression(expr);
+                self.push_syscall(Syscall::Write);
             }
         };
-        Ok(())
     }
 
-    fn generate_expression(&mut self, expr: &SrcExpr) -> Option<SrcTypedExpr> {
-        Some(match expr.inner() {
-            NodeExpr::IntLiteral(value) => Src::new(TypedExpr::IntLit(value.clone()), expr),
-            NodeExpr::StringLiteral(value) => {
-                let label = match self.string_lits.iter().position(|it| it == value) {
-                    Some(index) => str_label(index),
-                    None => {
-                        let label = str_label(self.string_lits.len());
-                        self.string_lits.push(value.clone());
-                        label
-                    }
-                };
+    fn generate_expression(&mut self, expr: &SrcExpr) {
+        match expr.inner() {
+            NodeExpr::Lit { typ, val } => match typ {
+                Type::Uint64 => {
+                    self.load_register(&X0, val.parse::<usize>().unwrap());
+                    self.push_reg(&X0);
+                }
+                Type::String => {
+                    let label = match self.string_lits.iter().position(|it| it == val) {
+                        Some(index) => str_label(index),
+                        None => {
+                            let label = str_label(self.string_lits.len());
+                            self.string_lits.push(val.clone());
+                            label
+                        }
+                    };
+                    let addr = Addr::Label(label);
+                    self.load_register(&X0, addr.clone());
+                    // I don't know why I have to sub 2 here, but if I don't it appears to extend
+                    // into the next string buffer
+                    self.load_register(&X1, val.as_bytes().len() - 2);
+                    self.push_regp(&X0, &X1);
+                }
+            },
+            NodeExpr::Var(var) => match var.get_type() {
+                Type::Uint64 => {
+                    let var = self.get_var(var);
 
-                Src::new(
-                    TypedExpr::StringLit {
-                        addr: Addr::Label(label),
-                        len: value.as_bytes().len(),
-                    },
-                    expr,
-                )
-            }
-            NodeExpr::Var(name) => {
-                let Some(var) = self.get_var(name) else {
-                    self.context.error(GenerationError::UndefinedVariable { expr: expr.clone(), name: name.clone() });
-                    return None;
-                };
-                Src::new(TypedExpr::Var(var.clone()), expr)
-            }
-        })
+                    self.load_reg(&X0, var.stack_loc);
+                    self.push_reg(&X0);
+                }
+                Type::String => {
+                    let var = self.get_var(var);
+
+                    self.load_regp(&X0, &X1, var.stack_loc);
+                    self.push_regp(&X0, &X1);
+                }
+            },
+        }
     }
 
     fn generate_string_literals(&mut self) {
@@ -540,16 +402,11 @@ impl<'a> Generator<'a> {
 
     fn push_syscall(&mut self, syscall: Syscall) {
         match &syscall {
-            Syscall::Exit { code } => self.load_register(&X0, code.to_owned()),
-            Syscall::Read {
-                fd: _,
-                buf: _,
-                bytes: _,
-            } => todo!(),
-            Syscall::Write { fd, buf, bytes } => {
-                self.load_register(&X0, fd.to_owned());
-                self.load_register(&X1, buf.to_owned());
-                self.load_register(&X2, bytes.to_owned());
+            Syscall::Exit => self.pop_reg(&X0),
+            Syscall::Read => todo!(),
+            Syscall::Write => {
+                self.pop_regp(&X1, &X2);
+                self.pop_reg(&X0);
             }
         }
         self.load_register(&X16, syscall.id());
@@ -584,7 +441,7 @@ impl<'a> Generator<'a> {
                 new_aligned - self.aligned_stack_size
             ));
             self.aligned_stack_size = new_aligned
-        } else if new_aligned < self.aligned_stack_size {
+        } else if (new_aligned + 32) < self.aligned_stack_size {
             self.push_instr(format!(
                 "add sp, sp, #{}",
                 self.aligned_stack_size - new_aligned
@@ -616,13 +473,13 @@ impl<'a> Generator<'a> {
     }
 
     fn pop_reg(&mut self, reg: &Reg) {
-        self.load_reg(reg, self.stack_size + reg.size());
+        self.load_reg(reg, self.stack_size);
         self.shrink_stack(reg.size());
     }
 
     fn pop_regp(&mut self, reg1: &Reg, reg2: &Reg) {
         let size = reg1.size() + reg2.size();
-        self.load_regp(reg1, reg2, self.stack_size + size);
+        self.load_regp(reg1, reg2, self.stack_size);
         self.shrink_stack(size);
     }
 
@@ -663,42 +520,14 @@ impl<'a> Generator<'a> {
         self.output.push_str(format!("{}\n", line).as_str())
     }
 
-    fn get_var(&self, name: &ArcStr) -> Option<&Var> {
-        self.vars.iter().rev().find(|var| &var.ident == name)
+    fn get_var(&self, sem_var: &semantics::Var) -> &Var {
+        match self.vars.iter().rev().find(|var| var.ident == sem_var.ident && var.typ == sem_var.typ) {
+            Some(val) => val,
+            None => panic!("Variable was not found in scope, this should not be possible after semantic analysis!"),
+        }
     }
 }
 
 fn str_label(index: usize) -> ArcStr {
     format!("str_{}", index).into()
-}
-
-#[derive(Debug)]
-enum GenerationError {
-    TypeError {
-        expr: SrcTypedExpr,
-        expected: ArcStr,
-    },
-    UndefinedVariable {
-        expr: SrcExpr,
-        name: ArcStr,
-    },
-}
-
-impl From<GenerationError> for MietteDiagnostic {
-    fn from(value: GenerationError) -> Self {
-        match value {
-            GenerationError::TypeError { expected, expr } => MietteDiagnostic::new(format!(
-                "Unexpected type '{}', expected '{}'",
-                expr.inner(),
-                expected
-            ))
-            .with_code("cmm::generate::type_error")
-            .add_label(format!("expected {}, got {}", expected, expr.inner()), expr),
-            GenerationError::UndefinedVariable { expr, name: ident } => {
-                MietteDiagnostic::new(format!("Undefined variable '{}'", ident,))
-                    .with_code("cmm::generate::undefined_variable")
-                    .add_label(format!("undefined variable '{}'", ident), expr)
-            }
-        }
-    }
 }

@@ -8,10 +8,12 @@ use crate::parser::*;
 use clap::Parser as ClapParser;
 use context::Context;
 use resolve_path::PathResolveExt;
+use semantics::SemanticAnalyzer;
 mod code_generator;
 mod context;
 mod lexer;
 mod parser;
+mod semantics;
 
 #[derive(ClapParser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -45,8 +47,9 @@ fn main() -> miette::Result<()> {
     let context = Rc::new(Context::new(src_path.to_string_lossy(), src));
 
     let tokens = Lexer::tokenize(context.clone())?;
-    let prog = Parser::parse(&tokens, context.clone())?;
-    let compiled = Generator::generate(&prog, context.clone())?;
+    let parse_tree = Parser::parse(&tokens, context.clone())?;
+    let ast = context.result(SemanticAnalyzer::analyze(&parse_tree, context.clone())?)?;
+    let compiled = Generator::generate(&ast, context.clone());
 
     fs::write(out_path, compiled).unwrap();
     Ok(())

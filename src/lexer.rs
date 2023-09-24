@@ -16,6 +16,7 @@ pub enum Token {
     Equals,
     OpenCurly,
     CloseCurly,
+    FSlash,
 }
 
 impl Display for Token {
@@ -34,6 +35,7 @@ impl Display for Token {
                 Self::Equals => "=".to_string(),
                 Self::OpenCurly => "{".to_string(),
                 Self::CloseCurly => "}".to_string(),
+                Self::FSlash => "/".to_string(),
             },
         )
     }
@@ -81,7 +83,7 @@ impl Lexer {
                 self.advance();
                 loop {
                     let Some((ch, _)) = self.peek() else {
-                        self.context.error(LexerError::UnexpectedEofInString {
+                        self.context.error(Error::UnexpectedEofInString {
                             start: pos,
                             eof: self.context.src().len(),
                         });
@@ -109,6 +111,13 @@ impl Lexer {
                 }
                 let span = (pos, buf.len());
                 tokens.push(Src::new(Token::StringLiteral(buf.into()), span))
+            } else if self.peek_match("//") {
+                let start = self.pos();
+
+                self.advance_by(2);
+                while self.peek().map_or(false, |(ch, _)| ch != '\n') {
+                    self.advance();
+                }
             } else if let Some(token) = match ch {
                 '(' => Some(Token::OpenParen),
                 ')' => Some(Token::CloseParen),
@@ -117,8 +126,7 @@ impl Lexer {
                 '{' => Some(Token::OpenCurly),
                 '}' => Some(Token::CloseCurly),
                 symbol => {
-                    self.context
-                        .error(LexerError::UnexpectedSymbol { pos, symbol });
+                    self.context.error(Error::UnexpectedSymbol { pos, symbol });
                     self.advance();
                     continue;
                 }
@@ -129,7 +137,7 @@ impl Lexer {
         }
 
         *self.cursor.borrow_mut() = 0;
-        self.context.result(tokens)
+        Ok(tokens)
     }
 
     fn consume_slice_after<S, R>(&self, predicate_start: S, predicate_rest: R) -> Option<Substr>
@@ -179,6 +187,14 @@ impl Lexer {
         self.peek_ahead(0)
     }
 
+    fn peek_match(&self, expected: &str) -> bool {
+        let substr = self
+            .context
+            .src()
+            .substr(self.pos()..(self.pos() + expected.len()));
+        substr.as_str() == expected
+    }
+
     fn peek_ahead(&self, offset: usize) -> Option<(char, usize)> {
         let pos = self.pos() + offset;
         self.context.src().chars().nth(pos).map(|char| (char, pos))
@@ -190,22 +206,22 @@ impl Lexer {
 }
 
 #[derive(Debug)]
-enum LexerError {
+enum Error {
     UnexpectedEofInString { start: usize, eof: usize },
     UnexpectedSymbol { pos: usize, symbol: char },
 }
 
-impl From<LexerError> for MietteDiagnostic {
-    fn from(value: LexerError) -> Self {
+impl From<Error> for MietteDiagnostic {
+    fn from(value: Error) -> Self {
         match value {
-            LexerError::UnexpectedEofInString { start, eof } => {
+            Error::UnexpectedEofInString { start, eof } => {
                 MietteDiagnostic::new("Unexpected EOF in string")
                     .with_code("cmm::lexer::unexpected_eof_in_string")
                     .add_label("start of string", start)
                     .add_label("end of file", eof - 1)
             }
 
-            LexerError::UnexpectedSymbol { pos, symbol } => {
+            Error::UnexpectedSymbol { pos, symbol } => {
                 MietteDiagnostic::new(format!("Unexpected symbol: {}", symbol))
                     .with_code("cmm::lexer::unexpected_symbol")
                     .add_label(format!("Unexpected symbol: {}", symbol), pos)
