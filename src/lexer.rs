@@ -16,7 +16,6 @@ pub enum Token {
     Equals,
     OpenCurly,
     CloseCurly,
-    FSlash,
 }
 
 impl Display for Token {
@@ -35,7 +34,6 @@ impl Display for Token {
                 Self::Equals => "=".to_string(),
                 Self::OpenCurly => "{".to_string(),
                 Self::CloseCurly => "}".to_string(),
-                Self::FSlash => "/".to_string(),
             },
         )
     }
@@ -112,8 +110,6 @@ impl Lexer {
                 let span = (pos, buf.len());
                 tokens.push(Src::new(Token::StringLiteral(buf.into()), span))
             } else if self.peek_match("//") {
-                let start = self.pos();
-
                 self.advance_by(2);
                 while self.peek().map_or(false, |(ch, _)| ch != '\n') {
                     self.advance();

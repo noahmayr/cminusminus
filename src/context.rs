@@ -81,14 +81,6 @@ impl<T> Src<T> {
     }
 }
 
-// #[derive(Error, Diagnostic, Debug)]
-// #[error("Oops it blew up")]
-// enum Error {
-//     Lexer(#[label()]SourceSpan),
-//     Parser,
-//     TypeChecker,
-// }
-
 #[derive(Debug)]
 pub struct Context {
     name: ArcStr,
@@ -105,15 +97,6 @@ pub struct ContextError {
     miette_src: NamedSource,
 }
 
-// impl Diagnostic for Context {
-//     fn related<'a>(&'a self) -> Option<Box<dyn Iterator<Item = &'a dyn Diagnostic> + 'a>> {
-//         Some(Box::new(self.errors.borrow().iter()))
-//     }
-//     fn source_code(&self) -> Option<&dyn miette::SourceCode> {
-//         self.miette_src
-//     }
-// }
-
 impl Context {
     pub fn new<N: Into<ArcStr>, S: Into<ArcStr>>(name: N, src: S) -> Self {
         let name: ArcStr = name.into();
@@ -127,19 +110,6 @@ impl Context {
 
     pub fn error<E: Into<MietteDiagnostic>>(&self, error: E) {
         self.errors.borrow_mut().push(error.into());
-    }
-
-    pub fn make_error<M: Into<String>, S: Into<SourceSpan>, C: Into<String>, L: Into<String>>(
-        &self,
-        msg: M,
-        span: S,
-        code: C,
-        label: L,
-    ) {
-        let diagnostic = MietteDiagnostic::new(msg)
-            .with_code(code)
-            .with_label(LabeledSpan::new_with_span(Some(label.into()), span));
-        self.error(diagnostic);
     }
 
     pub fn src(&self) -> ArcStr {

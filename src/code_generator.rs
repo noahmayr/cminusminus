@@ -6,7 +6,6 @@ use crate::{
 };
 use arcstr::ArcStr;
 use lazy_static::lazy_static;
-use miette::{MietteDiagnostic, Result};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Addr {

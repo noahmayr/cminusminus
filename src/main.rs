@@ -48,6 +48,7 @@ fn main() -> miette::Result<()> {
 
     let tokens = Lexer::tokenize(context.clone())?;
     let parse_tree = Parser::parse(&tokens, context.clone())?;
+
     let ast = context.result(SemanticAnalyzer::analyze(&parse_tree, context.clone())?)?;
     let compiled = Generator::generate(&ast, context.clone());
 

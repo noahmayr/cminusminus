@@ -53,7 +53,7 @@ pub enum NodeExpr {
 impl TypeOf for NodeExpr {
     fn get_type(&self) -> Type {
         match self {
-            NodeExpr::Lit { typ, val } => *typ,
+            NodeExpr::Lit { typ, val: _ } => *typ,
             NodeExpr::Var(var) => var.get_type(),
         }
     }
