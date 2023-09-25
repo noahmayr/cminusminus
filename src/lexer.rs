@@ -16,6 +16,10 @@ pub enum Token {
     Equals,
     OpenCurly,
     CloseCurly,
+    Plus,
+    Minus,
+    Star,
+    FSlash,
 }
 
 impl Display for Token {
@@ -34,6 +38,10 @@ impl Display for Token {
                 Self::Equals => "=".to_string(),
                 Self::OpenCurly => "{".to_string(),
                 Self::CloseCurly => "}".to_string(),
+                Self::Plus => "+".to_string(),
+                Self::Minus => "-".to_string(),
+                Self::Star => "*".to_string(),
+                Self::FSlash => "/".to_string(),
             },
         )
     }
@@ -132,6 +140,10 @@ impl Lexer {
                 '=' => Some(Token::Equals),
                 '{' => Some(Token::OpenCurly),
                 '}' => Some(Token::CloseCurly),
+                '+' => Some(Token::Plus),
+                '-' => Some(Token::Minus),
+                '*' => Some(Token::Star),
+                '/' => Some(Token::FSlash),
                 symbol => {
                     self.context.error(Error::UnexpectedSymbol { pos, symbol });
                     self.advance();

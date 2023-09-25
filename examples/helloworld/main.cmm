@@ -8,4 +8,5 @@ let code = 0;
 
 }
 print(msg);
+print(1+2+3+4+5-10);
 exit(code);

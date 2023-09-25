@@ -4,11 +4,22 @@ use crate::{context::*, lexer::*};
 use arcstr::ArcStr;
 use miette::{MietteDiagnostic, Result, SourceSpan};
 
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub enum BinExpr {
+    Add,
+    Sub,
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum NodeExpr {
     IntLiteral(ArcStr),
     StringLiteral(ArcStr),
     Var(ArcStr),
+    BinExpr {
+        op: BinExpr,
+        lhs: Box<SrcExpr>,
+        rhs: Box<SrcExpr>,
+    },
 }
 pub type SrcExpr = Src<NodeExpr>;
 
@@ -230,20 +241,49 @@ impl<'a> Parser<'a> {
 
     fn parse_expression(&self) -> Option<SrcExpr> {
         let token = self.peek()?;
-        match token.inner() {
+        let mut lhs = match token.inner() {
             Token::IntLiteral(value) => {
                 self.advance();
-                Some(Src::new(NodeExpr::IntLiteral(value.clone()), token))
+                Some(NodeExpr::IntLiteral(value.clone()))
             }
             Token::StringLiteral(value) => {
                 self.advance();
-                Some(Src::new(NodeExpr::StringLiteral(value.clone()), token))
+                Some(NodeExpr::StringLiteral(value.clone()))
             }
             Token::Ident(name) => {
                 self.advance();
-                Some(Src::new(NodeExpr::Var(name.clone()), token))
+                Some(NodeExpr::Var(name.clone()))
             }
             _ => None,
+        }
+        .map(|node| Src::new(node, token))?;
+
+        loop {
+            let Some(token) = self.peek() else {
+                return Some(lhs);
+            };
+            let op = match token.inner() {
+                Token::Plus => Some(BinExpr::Add),
+                Token::Minus => Some(BinExpr::Sub),
+                _ => None,
+            };
+            let Some(op) = op else {
+                return Some(lhs);
+            };
+            self.advance();
+            let Some(rhs) = self.parse_expression() else {
+                //TODO: error
+                return None;
+            };
+            let span = lhs.span_to(&rhs);
+            lhs = Src::new(
+                NodeExpr::BinExpr {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                span.clone(),
+            );
         }
     }
 

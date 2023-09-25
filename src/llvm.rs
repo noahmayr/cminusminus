@@ -10,7 +10,7 @@ use inkwell::{
     context::Context as Ctx,
     execution_engine::JitFunction,
     module::{Linkage, Module},
-    values::{BasicValue, PointerValue},
+    values::{BasicValue, IntValue, PointerValue},
     AddressSpace, OptimizationLevel,
 };
 
@@ -93,25 +93,25 @@ impl<'a, 'ctx> Llvm<'a, 'ctx> {
         let basic_block = self.ctx.append_basic_block(main, "entry");
 
         self.builder.borrow_mut().position_at_end(basic_block);
-        self.generate_scope(&self.ast.0);
+        self.gen_scope(&self.ast.0);
         let zero = i32_type.const_zero();
 
         self.builder.borrow_mut().build_return(Some(&zero));
     }
 
-    fn generate_scope(&mut self, scope: &SrcScope) {
+    fn gen_scope(&mut self, scope: &SrcScope) {
         let var_size = self.vars.borrow().len();
         for statement in scope.statements.iter() {
-            self.generate_statement(statement)
+            self.gen_stmt(statement)
         }
         self.vars.borrow_mut().truncate(var_size);
     }
 
-    fn generate_statement(&mut self, statement: &SrcStmt) {
+    fn gen_stmt(&mut self, statement: &SrcStmt) {
         match statement.inner() {
-            NodeStmt::Builtin(builtin) => self.generate_bultin(builtin),
+            NodeStmt::Builtin(builtin) => self.gen_bultin(builtin),
             NodeStmt::Decl { typ, ident, expr } => {
-                let llvm_expr = self.generate_expression(expr);
+                let llvm_expr = self.gen_expr(expr);
 
                 match typ {
                     Type::Int32 => {
@@ -140,17 +140,17 @@ impl<'a, 'ctx> Llvm<'a, 'ctx> {
                 }
             }
             NodeStmt::Assign { var, expr } => {
-                let llvm_expr = self.generate_expression(expr);
+                let llvm_expr = self.gen_expr(expr);
                 let var = self.get_var(var);
                 self.builder.borrow().build_store(var.ptr, llvm_expr);
             }
             NodeStmt::Scope(scope) => {
-                self.generate_scope(scope);
+                self.gen_scope(scope);
             }
         };
     }
 
-    fn generate_bultin(&self, builtin: &SrcBuiltin) {
+    fn gen_bultin(&self, builtin: &SrcBuiltin) {
         match builtin.inner() {
             NodeBuiltin::Exit(expr) => {
                 let module = self.module.borrow_mut();
@@ -166,7 +166,7 @@ impl<'a, 'ctx> Llvm<'a, 'ctx> {
                         fn_exit
                     }
                 };
-                let expr = self.generate_expression(expr);
+                let expr = self.gen_expr(expr);
 
                 let builder = self.builder.borrow_mut();
                 builder.build_call(fn_exit, &[expr.into()], "call");
@@ -184,9 +184,12 @@ impl<'a, 'ctx> Llvm<'a, 'ctx> {
                         fn_printf
                     }
                 };
-                let expr = self.generate_expression(expr);
-
-                let fmt_ptr = self.string_literal(&arcstr::literal!("%s"));
+                let t = expr.get_type();
+                let expr = self.gen_expr(expr);
+                let fmt_ptr = match t {
+                    Type::Int32 => self.string_literal(&arcstr::literal!("%i")),
+                    Type::String => self.string_literal(&arcstr::literal!("%s")),
+                };
                 self.builder.borrow_mut().build_call(
                     fn_printf,
                     &[fmt_ptr.as_basic_value_enum().into(), expr.into()],
@@ -196,7 +199,7 @@ impl<'a, 'ctx> Llvm<'a, 'ctx> {
         };
     }
 
-    fn generate_expression(&self, expr: &SrcExpr) -> inkwell::values::BasicValueEnum {
+    fn gen_expr(&self, expr: &SrcExpr) -> inkwell::values::BasicValueEnum {
         match expr.inner() {
             NodeExpr::Lit { typ, val } => match typ {
                 Type::Int32 => {
@@ -228,6 +231,29 @@ impl<'a, 'ctx> Llvm<'a, 'ctx> {
                         .as_basic_value_enum()
                 }
             },
+            NodeExpr::Bin {
+                typ: _,
+                op,
+                lhs,
+                rhs,
+            } => {
+                let lhs = self.gen_expr(lhs);
+                let rhs = self.gen_expr(rhs);
+                let builder = self.builder.borrow();
+                match op {
+                    crate::parser::BinExpr::Add => builder.build_int_add(
+                        IntValue::try_from(lhs).unwrap(),
+                        IntValue::try_from(rhs).unwrap(),
+                        "add",
+                    ),
+                    crate::parser::BinExpr::Sub => builder.build_int_sub(
+                        IntValue::try_from(lhs).unwrap(),
+                        IntValue::try_from(rhs).unwrap(),
+                        "sub",
+                    ),
+                }
+                .as_basic_value_enum()
+            }
         }
     }
 

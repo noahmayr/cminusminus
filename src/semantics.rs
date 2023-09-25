@@ -1,6 +1,9 @@
 use std::{fmt::Display, rc::Rc};
 
-use crate::{context::*, parser};
+use crate::{
+    context::*,
+    parser::{self, BinExpr},
+};
 use arcstr::ArcStr;
 use miette::{MietteDiagnostic, Result, SourceSpan};
 
@@ -45,18 +48,34 @@ impl<T: TypeOf> TypeOf for Src<T> {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub enum NodeExpr {
-    Lit { typ: Type, val: ArcStr },
-    Var(Var),
-}
 impl TypeOf for NodeExpr {
     fn get_type(&self) -> Type {
         match self {
             NodeExpr::Lit { typ, val: _ } => *typ,
             NodeExpr::Var(var) => var.get_type(),
+            NodeExpr::Bin {
+                typ,
+                op: _,
+                lhs: _,
+                rhs: _,
+            } => *typ,
         }
     }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum NodeExpr {
+    Lit {
+        typ: Type,
+        val: ArcStr,
+    },
+    Var(Var),
+    Bin {
+        typ: Type,
+        op: BinExpr,
+        lhs: Box<SrcExpr>,
+        rhs: Box<SrcExpr>,
+    },
 }
 pub type SrcExpr = Src<NodeExpr>;
 
@@ -206,9 +225,9 @@ impl<'a> SemanticAnalyzer<'a> {
                 let Some(expr) = self.analyze_expression(expr) else {
                     return Ok(None);
                 };
-                if !self.expect_type(&expr, Type::String) {
-                    return Ok(None);
-                }
+                // if !self.expect_type(&expr, Type::String) {
+                //     return Ok(None);
+                // }
                 Ok(Some(Src::new(NodeBuiltin::Print(expr), builtin)))
             }
         }
@@ -239,6 +258,24 @@ impl<'a> SemanticAnalyzer<'a> {
                     return None;
                 };
                 Src::new(NodeExpr::Var(var.clone()), expr)
+            }
+            parser::NodeExpr::BinExpr { op, lhs, rhs } => {
+                let (lhs, rhs) = self
+                    .analyze_expression(lhs)
+                    .zip(self.analyze_expression(rhs))?;
+                if !self.expect_type(&lhs, Type::Int32) || !self.expect_type(&rhs, Type::Int32) {
+                    return None;
+                }
+                let span = lhs.span_to(&rhs);
+                Src::new(
+                    NodeExpr::Bin {
+                        typ: lhs.get_type(),
+                        op: *op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    span,
+                )
             }
         })
     }
