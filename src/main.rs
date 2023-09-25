@@ -53,6 +53,7 @@ fn main() -> miette::Result<()> {
 
     let ctx = inkwell::context::Context::create();
     if args.exec {
+        println!();
         Llvm::execute(&ast, context.clone(), &ctx);
     }
 

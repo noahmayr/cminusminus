@@ -11,8 +11,7 @@ object_path := exec_path + ".o"
 default:
   @-just example=`ls {{example_dir}} | fzf` run
 
-run: compile lower assemble link exec
-build_run: assemble link exec
+build_run: compile lower assemble link exec
 
 exec:
   {{exec_path}}
@@ -33,3 +32,6 @@ compile:
   @mkdir -p {{out_path}}
   @echo Compiling {{example}}
   @cargo run {{source_path}} -o {{ll_path}}
+
+run:
+  @cargo run {{source_path}} -x
