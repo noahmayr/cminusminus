@@ -1,10 +1,10 @@
-let a = 1;
-let x = "  hello world\n";
-let b = 4;
-let y = "  bye world\n";
-let c = 0;
-print("x:\n");
-print(x);
-print("y:\n");
-print(y);
-exit(b);
+let msg = "goodbye world\n";
+let code = 0;
+{
+  let msg = "hello world\n";
+  print("Printing msg from inside block:\n  ");
+  print(msg);
+}
+print("Printing msg from outside block:\n  ");
+print(msg);
+exit(code);

@@ -77,27 +77,25 @@ impl<'a> Parser<'a> {
             Ok(Some(Src::new(NodeStmt::Builtin(builtin), span)))
         } else if let Some(token_let) = self.try_consume(&Token::Let) {
             let Some(src_ident) = self.peek() else {
-self.context.error(Error::UnexpectedEof {
-                        expected: Token::Ident("some_identifier".into()),
-                        eof: self.context.eof(),
-                    });
-                    return Ok(None);
-
+                self.context.error(Error::UnexpectedEof {
+                    expected: Token::Ident("some_identifier".into()),
+                    eof: self.context.eof(),
+                });
+                return Ok(None);
             };
             let Token::Ident(ident) = src_ident.inner() else {
-self.context.error(Error::UnexpectedEof {
-                        expected: Token::Ident("placeholder".into()),
-                        eof:  self.context.eof(),
-                    });
-                        return Ok(None);
-
+                self.context.error(Error::UnexpectedEof {
+                    expected: Token::Ident("placeholder".into()),
+                    eof: self.context.eof(),
+                });
+                return Ok(None);
             };
             self.advance();
             let Some(eq) = self.consume_or_fail(&Token::Equals, src_ident.end())? else {
                 return Ok(None);
             };
             let Some(expr) = self.parse_expression() else {
-                        self.context.error(Error::ExpressionExpected {
+                self.context.error(Error::ExpressionExpected {
                     after: token_let.to(eq),
                 });
                 return Ok(None);
@@ -125,7 +123,14 @@ self.context.error(Error::UnexpectedEof {
                 };
                 statements.push(statement);
             }
-            let Some(end) = self.consume_or_fail(&Token::CloseCurly, statements.last().map(|s| s.end()).unwrap_or_else(|| start.end() ))? else {
+            let Some(end) = self.consume_or_fail(
+                &Token::CloseCurly,
+                statements
+                    .last()
+                    .map(|s| s.end())
+                    .unwrap_or_else(|| start.end()),
+            )?
+            else {
                 return Ok(None);
             };
             let scope = Src::new(NodeScope { statements }, start.to(end));
@@ -160,7 +165,9 @@ self.context.error(Error::UnexpectedEof {
                     };
                     let builtin_exit = NodeBuiltin::Exit(expression.clone());
 
-                    let Some(close_paren) = self.consume_or_fail(&Token::CloseParen, expression.end())? else {
+                    let Some(close_paren) =
+                        self.consume_or_fail(&Token::CloseParen, expression.end())?
+                    else {
                         return Ok(None);
                     };
 
@@ -179,7 +186,9 @@ self.context.error(Error::UnexpectedEof {
                         return Ok(None);
                     };
 
-                    let Some(close_paren) = self.consume_or_fail(&Token::CloseParen, expression.end())? else {
+                    let Some(close_paren) =
+                        self.consume_or_fail(&Token::CloseParen, expression.end())?
+                    else {
                         return Ok(None);
                     };
 

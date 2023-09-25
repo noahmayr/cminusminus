@@ -6,7 +6,7 @@ use miette::{MietteDiagnostic, Result, SourceSpan};
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum Type {
-    Uint64,
+    Int32,
     String,
 }
 
@@ -16,7 +16,7 @@ impl Display for Type {
             f,
             "{}",
             match self {
-                Type::Uint64 => "uint64",
+                Type::Int32 => "int32",
                 Type::String => "string",
             }
         )
@@ -118,12 +118,14 @@ impl<'a> SemanticAnalyzer<'a> {
         Ok(Some(match statement.inner() {
             parser::NodeStmt::Builtin(builtin) => {
                 let Some(builtin) = self.anaylze_builtin(builtin)? else {
-                return Ok(None);
-            };
+                    return Ok(None);
+                };
                 Src::new(NodeStmt::Builtin(builtin), statement)
             }
             parser::NodeStmt::Let { ident, expr } => {
-                let Some(expr) = self.analyze_expression(expr) else {return Ok(None);};
+                let Some(expr) = self.analyze_expression(expr) else {
+                    return Ok(None);
+                };
                 let var = Var {
                     typ: expr.get_type(),
                     ident: ident.clone(),
@@ -159,14 +161,18 @@ impl<'a> SemanticAnalyzer<'a> {
     fn anaylze_builtin(&mut self, builtin: &parser::SrcBuiltin) -> Result<Option<SrcBuiltin>> {
         match builtin.inner() {
             parser::NodeBuiltin::Exit(expr) => {
-                let Some(expr) = self.analyze_expression(expr) else {return Ok(None);};
-                if !self.expect_type(&expr, Type::Uint64) {
+                let Some(expr) = self.analyze_expression(expr) else {
+                    return Ok(None);
+                };
+                if !self.expect_type(&expr, Type::Int32) {
                     return Ok(None);
                 }
                 Ok(Some(Src::new(NodeBuiltin::Exit(expr), builtin)))
             }
             parser::NodeBuiltin::Print(expr) => {
-                let Some(expr) = self.analyze_expression(expr) else {return Ok(None);};
+                let Some(expr) = self.analyze_expression(expr) else {
+                    return Ok(None);
+                };
                 if !self.expect_type(&expr, Type::String) {
                     return Ok(None);
                 }
@@ -179,7 +185,7 @@ impl<'a> SemanticAnalyzer<'a> {
         Some(match expr.inner() {
             parser::NodeExpr::IntLiteral(value) => Src::new(
                 NodeExpr::Lit {
-                    typ: Type::Uint64,
+                    typ: Type::Int32,
                     val: value.clone(),
                 },
                 expr,
@@ -193,7 +199,10 @@ impl<'a> SemanticAnalyzer<'a> {
             ),
             parser::NodeExpr::Var(name) => {
                 let Some(var) = self.get_var(name) else {
-                    self.context.error(Error::UndefinedVariable { span: expr.into(), name: name.clone() });
+                    self.context.error(Error::UndefinedVariable {
+                        span: expr.into(),
+                        name: name.clone(),
+                    });
                     return None;
                 };
                 Src::new(NodeExpr::Var(var.clone()), expr)

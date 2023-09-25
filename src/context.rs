@@ -62,22 +62,14 @@ impl<T> Src<T> {
         self.pos() + self.len()
     }
 
-    pub fn from_pos(&self, from: usize) -> SourceSpan {
-        (from..self.end()).into()
-    }
-
-    pub fn to_pos(&self, to: usize) -> SourceSpan {
-        (self.pos()..to).into()
-    }
-
     pub fn from<S: Into<SourceSpan>>(&self, from: S) -> SourceSpan {
         let from: SourceSpan = from.into();
-        self.from_pos(from.offset())
+        (from.offset()..self.end()).into()
     }
 
     pub fn to<S: Into<SourceSpan>>(&self, to: S) -> SourceSpan {
         let to: SourceSpan = to.into();
-        self.to_pos(to.offset() + to.len())
+        (self.pos()..(to.offset() + to.len())).into()
     }
 }
 
@@ -106,6 +98,10 @@ impl Context {
             src,
             errors: RefCell::new(vec![]),
         }
+    }
+
+    pub fn name(&self) -> ArcStr {
+        self.name.clone()
     }
 
     pub fn error<E: Into<MietteDiagnostic>>(&self, error: E) {

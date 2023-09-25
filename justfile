@@ -4,27 +4,32 @@ entry := "main.cmm"
 source_path := example_dir / example / entry
 out_path := if example == "" { error("no example selected") } else { example_dir / example / "out" }
 exec_path := out_path / example
-asm_path := exec_path + ".asm"
+asm_path := exec_path + ".s"
+ll_path := exec_path + ".ll"
 object_path := exec_path + ".o"
 
 default:
   @-just example=`ls {{example_dir}} | fzf` run
 
-run: assemble  build link  exec
-build_run:   build link  exec
+run: compile lower assemble link exec
+build_run: assemble link exec
 
 exec:
   {{exec_path}}
 
 link:
   @echo Linking {{example}}
-  @ld -macosx_version_min 13.0.0 -o {{exec_path}} {{object_path}} -lSystem -syslibroot `xcrun -sdk macosx --show-sdk-path` -e _start -arch arm64
-  
-build:
+  @ld64.lld -arch arm64 -platform_version macos 13.2.0 13.2.0 -lSystem -L`xcrun --sdk macosx --show-sdk-path`/usr/lib {{object_path}} -o {{exec_path}}
+
+assemble:
   @echo Assembling {{example}}
   @as {{asm_path}} -o {{object_path}}
 
-assemble:
+lower:
+  @echo Lowering {{example}}
+  @llc --aarch64-neon-syntax=apple {{ll_path}} -o {{asm_path}} 
+
+compile:
   @mkdir -p {{out_path}}
   @echo Compiling {{example}}
-  @RUSTFLAGS=-Awarnings cargo -q run {{source_path}} -o {{asm_path}}
+  @cargo run {{source_path}} -o {{ll_path}}

@@ -77,7 +77,7 @@ impl Lexer {
             } else if self.consume_slice(char::is_whitespace).is_some() {
                 continue;
             } else if ch == '"' {
-                let mut buf = "\"".to_string();
+                let mut buf = String::new();
                 self.advance();
                 loop {
                     let Some((ch, _)) = self.peek() else {
@@ -89,11 +89,22 @@ impl Lexer {
                     };
                     match ch {
                         '"' => {
-                            buf.push(ch);
+                            // buf.push(ch);
                             self.advance();
                             break;
                         }
                         '\\' => {
+                            if let Some((escaped, _)) = self.peek_ahead(1) {
+                                if let Some(unescaped) = match escaped {
+                                    'n' => Some('\n'),
+                                    't' => Some('\t'),
+                                    _ => None,
+                                } {
+                                    buf.push(unescaped);
+                                    self.advance_by(2);
+                                    continue;
+                                }
+                            }
                             self.advance();
                             buf.push(ch);
                             if let Some(('"', _)) = self.peek() {
@@ -107,7 +118,7 @@ impl Lexer {
                         }
                     }
                 }
-                let span = (pos, buf.len());
+                let span = pos..self.pos();
                 tokens.push(Src::new(Token::StringLiteral(buf.into()), span))
             } else if self.peek_match("//") {
                 self.advance_by(2);
