@@ -1,10 +1,11 @@
-let msg = "goodbye world\n";
+let msg = "goodbye world from outside block\n";
 let code = 0;
 {
-  let msg = "hello world\n";
-  print("Printing msg from inside block:\n  ");
+  let msg = "hello world from inside block\n";
   print(msg);
+  msg = "changed msg inside block\n";
+  print(msg);
+
 }
-print("Printing msg from outside block:\n  ");
 print(msg);
 exit(code);

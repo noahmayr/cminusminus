@@ -28,7 +28,8 @@ pub type SrcScope = Src<NodeScope>;
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum NodeStmt {
     Builtin(SrcBuiltin),
-    Let { ident: ArcStr, expr: SrcExpr },
+    Decl { ident: ArcStr, expr: SrcExpr },
+    Assign { ident: ArcStr, expr: SrcExpr },
     Scope(SrcScope),
 }
 pub type SrcStmt = Src<NodeStmt>;
@@ -73,7 +74,7 @@ impl<'a> Parser<'a> {
                 Some(semi) => semi.end(),
                 None => builtin.end(),
             };
-            let span = builtin.to(end);
+            let span = builtin.span_to(end);
             Ok(Some(Src::new(NodeStmt::Builtin(builtin), span)))
         } else if let Some(token_let) = self.try_consume(&Token::Let) {
             let Some(src_ident) = self.peek() else {
@@ -96,7 +97,7 @@ impl<'a> Parser<'a> {
             };
             let Some(expr) = self.parse_expression() else {
                 self.context.error(Error::ExpressionExpected {
-                    after: token_let.to(eq),
+                    after: token_let.span_to(eq),
                 });
                 return Ok(None);
             };
@@ -104,13 +105,39 @@ impl<'a> Parser<'a> {
                 Some(semi) => semi.end(),
                 None => token_let.end(),
             };
-            let span = token_let.to(end);
+            let span = token_let.span_to(end);
             Ok(Some(Src::new(
-                NodeStmt::Let {
+                NodeStmt::Decl {
                     ident: ident.clone(),
                     expr,
                 },
                 span,
+            )))
+        } else if let Some(Src {
+            inner: Token::Ident(ident),
+            span: ident_span,
+        }) = self.peek()
+        {
+            self.advance();
+            let Some(eq) = self.consume_or_fail(&Token::Equals, ident_span.offset()+ident_span.len())? else {
+                return Ok(None);
+            };
+            let Some(expr) = self.parse_expression() else {
+                self.context.error(Error::ExpressionExpected {
+                    after: ident_span.span_to(eq)
+                });
+                return Ok(None);
+            };
+            let end = match self.consume_or_fail(&Token::Semicolon, expr.end())? {
+                Some(semi) => semi.end(),
+                None => ident_span.offset() + ident_span.len(),
+            };
+            Ok(Some(Src::new(
+                NodeStmt::Assign {
+                    ident: ident.clone(),
+                    expr,
+                },
+                ident_span.span_to(end),
             )))
         } else if let Some(start) = self.try_consume(&Token::OpenCurly) {
             let mut statements = vec![];
@@ -133,8 +160,8 @@ impl<'a> Parser<'a> {
             else {
                 return Ok(None);
             };
-            let scope = Src::new(NodeScope { statements }, start.to(end));
-            Ok(Some(Src::new(NodeStmt::Scope(scope), start.to(end))))
+            let scope = Src::new(NodeScope { statements }, start.span_to(end));
+            Ok(Some(Src::new(NodeStmt::Scope(scope), start.span_to(end))))
         } else if let Some(token) = self.peek() {
             self.context.error(Error::UnexpectedToken {
                 token: token.clone(),
@@ -159,7 +186,7 @@ impl<'a> Parser<'a> {
                     };
                     let Some(expression) = self.parse_expression() else {
                         self.context.error(Error::ExpressionExpected {
-                            after: token.to(prev),
+                            after: token.span_to(prev),
                         });
                         return Ok(None);
                     };
@@ -171,7 +198,7 @@ impl<'a> Parser<'a> {
                         return Ok(None);
                     };
 
-                    Ok(Some(Src::new(builtin_exit, token.to(close_paren))))
+                    Ok(Some(Src::new(builtin_exit, token.span_to(close_paren))))
                 }
                 "print" => {
                     self.advance();
@@ -181,7 +208,7 @@ impl<'a> Parser<'a> {
                     };
                     let Some(expression) = self.parse_expression() else {
                         self.context.error(Error::ExpressionExpected {
-                            after: token.to(prev),
+                            after: token.span_to(prev),
                         });
                         return Ok(None);
                     };
@@ -193,7 +220,7 @@ impl<'a> Parser<'a> {
                     };
 
                     let builtin_print = NodeBuiltin::Print(expression);
-                    Ok(Some(Src::new(builtin_print, token.to(close_paren))))
+                    Ok(Some(Src::new(builtin_print, token.span_to(close_paren))))
                 }
                 _ => Ok(None),
             },

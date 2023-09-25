@@ -6,8 +6,8 @@ use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Src<T> {
-    inner: T,
-    span: SourceSpan,
+    pub inner: T,
+    pub span: SourceSpan,
 }
 
 impl<T> Deref for Src<T> {
@@ -27,6 +27,27 @@ impl<T> From<Src<T>> for SourceSpan {
 impl<T> From<&Src<T>> for SourceSpan {
     fn from(val: &Src<T>) -> Self {
         val.span
+    }
+}
+
+pub trait Spannable {
+    fn end(&self) -> usize;
+    fn span_from<S: Into<SourceSpan>>(&self, from: S) -> SourceSpan;
+    fn span_to<S: Into<SourceSpan>>(&self, to: S) -> SourceSpan;
+}
+impl Spannable for SourceSpan {
+    fn end(&self) -> usize {
+        self.offset() + self.len()
+    }
+
+    fn span_from<S: Into<SourceSpan>>(&self, from: S) -> SourceSpan {
+        let from: SourceSpan = from.into();
+        (from.offset()..self.end()).into()
+    }
+
+    fn span_to<S: Into<SourceSpan>>(&self, to: S) -> SourceSpan {
+        let to: SourceSpan = to.into();
+        (self.offset()..to.end()).into()
     }
 }
 
@@ -50,26 +71,26 @@ impl<T> Src<T> {
         &self.span
     }
 
-    pub fn pos(&self) -> usize {
+    pub fn offset(&self) -> usize {
         self.span.offset()
     }
 
     pub fn len(&self) -> usize {
         self.span.len()
     }
+}
 
-    pub fn end(&self) -> usize {
-        self.pos() + self.len()
+impl<T> Spannable for Src<T> {
+    fn end(&self) -> usize {
+        self.span.end()
     }
 
-    pub fn from<S: Into<SourceSpan>>(&self, from: S) -> SourceSpan {
-        let from: SourceSpan = from.into();
-        (from.offset()..self.end()).into()
+    fn span_from<S: Into<SourceSpan>>(&self, from: S) -> SourceSpan {
+        self.span.span_from(from)
     }
 
-    pub fn to<S: Into<SourceSpan>>(&self, to: S) -> SourceSpan {
-        let to: SourceSpan = to.into();
-        (self.pos()..(to.offset() + to.len())).into()
+    fn span_to<S: Into<SourceSpan>>(&self, to: S) -> SourceSpan {
+        self.span.span_to(to)
     }
 }
 

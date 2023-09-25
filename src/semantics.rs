@@ -76,9 +76,13 @@ pub type SrcScope = Src<NodeScope>;
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum NodeStmt {
     Builtin(SrcBuiltin),
-    Let {
+    Decl {
         typ: Type,
         ident: ArcStr,
+        expr: SrcExpr,
+    },
+    Assign {
+        var: Var,
         expr: SrcExpr,
     },
     Scope(SrcScope),
@@ -122,7 +126,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 };
                 Src::new(NodeStmt::Builtin(builtin), statement)
             }
-            parser::NodeStmt::Let { ident, expr } => {
+            parser::NodeStmt::Decl { ident, expr } => {
                 let Some(expr) = self.analyze_expression(expr) else {
                     return Ok(None);
                 };
@@ -132,9 +136,38 @@ impl<'a> SemanticAnalyzer<'a> {
                 };
                 self.vars.push(var);
                 Src::new(
-                    NodeStmt::Let {
+                    NodeStmt::Decl {
                         typ: expr.get_type(),
                         ident: ident.clone(),
+                        expr,
+                    },
+                    statement,
+                )
+            }
+            parser::NodeStmt::Assign { ident, expr } => {
+                let Some(expr) = self.analyze_expression(expr) else {
+                    return Ok(None);
+                };
+                let var = match self.get_var(ident) {
+                    Some(var) if var.get_type() != expr.get_type() => {
+                        self.context.error(Error::TypeError {
+                            expr,
+                            expected: var.get_type(),
+                        });
+                        return Ok(None);
+                    }
+                    None => {
+                        self.context.error(Error::UndefinedVariable {
+                            span: statement.into(),
+                            name: ident.clone(),
+                        });
+                        return Ok(None);
+                    }
+                    Some(var) => var,
+                };
+                Src::new(
+                    NodeStmt::Assign {
+                        var: var.clone(),
                         expr,
                     },
                     statement,
@@ -247,9 +280,10 @@ impl From<Error> for MietteDiagnostic {
                 expr,
             ),
             Error::UndefinedVariable { span, name } => {
-                MietteDiagnostic::new(format!("Undefined variable '{}'", name,))
-                    .with_code("cmm::semantics::undefined_variable")
-                    .add_label(format!("undefined variable '{}'", name), span)
+                MietteDiagnostic::new(format!("Undeclared variable '{}'", name,))
+                    .with_code("cmm::semantics::undeclared_variable")
+                    .add_label(format!("undeclared variable '{}'", name), span)
+                    .with_help("Use `let var = value;` to declare a variable")
             }
         }
     }

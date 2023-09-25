@@ -110,7 +110,7 @@ impl<'a, 'ctx> Llvm<'a, 'ctx> {
     fn generate_statement(&mut self, statement: &SrcStmt) {
         match statement.inner() {
             NodeStmt::Builtin(builtin) => self.generate_bultin(builtin),
-            NodeStmt::Let { typ, ident, expr } => {
+            NodeStmt::Decl { typ, ident, expr } => {
                 let llvm_expr = self.generate_expression(expr);
 
                 match typ {
@@ -138,6 +138,11 @@ impl<'a, 'ctx> Llvm<'a, 'ctx> {
                         });
                     }
                 }
+            }
+            NodeStmt::Assign { var, expr } => {
+                let llvm_expr = self.generate_expression(expr);
+                let var = self.get_var(var);
+                self.builder.borrow().build_store(var.ptr, llvm_expr);
             }
             NodeStmt::Scope(scope) => {
                 self.generate_scope(scope);
