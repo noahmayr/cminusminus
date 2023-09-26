@@ -237,23 +237,19 @@ impl<'a, 'ctx> Llvm<'a, 'ctx> {
                 lhs,
                 rhs,
             } => {
-                let lhs = self.gen_expr(lhs);
-                let rhs = self.gen_expr(rhs);
+                let lhs = IntValue::try_from(self.gen_expr(lhs)).unwrap();
+                let rhs = IntValue::try_from(self.gen_expr(rhs)).unwrap();
                 let builder = self.builder.borrow();
+
                 match op {
-                    crate::parser::BinExpr::Add => builder.build_int_add(
-                        IntValue::try_from(lhs).unwrap(),
-                        IntValue::try_from(rhs).unwrap(),
-                        "add",
-                    ),
-                    crate::parser::BinExpr::Sub => builder.build_int_sub(
-                        IntValue::try_from(lhs).unwrap(),
-                        IntValue::try_from(rhs).unwrap(),
-                        "sub",
-                    ),
+                    crate::parser::OpType::Add => builder.build_int_add(lhs, rhs, "add"),
+                    crate::parser::OpType::Sub => builder.build_int_sub(lhs, rhs, "sub"),
+                    crate::parser::OpType::Mul => builder.build_int_mul(lhs, rhs, "mul"),
+                    crate::parser::OpType::Div => builder.build_int_signed_div(lhs, rhs, "div"),
                 }
                 .as_basic_value_enum()
             }
+            NodeExpr::Paren(inner) => self.gen_expr(inner),
         }
     }
 

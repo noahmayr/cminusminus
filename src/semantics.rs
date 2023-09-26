@@ -2,7 +2,7 @@ use std::{fmt::Display, rc::Rc};
 
 use crate::{
     context::*,
-    parser::{self, BinExpr},
+    parser::{self, OpType},
 };
 use arcstr::ArcStr;
 use miette::{MietteDiagnostic, Result, SourceSpan};
@@ -59,6 +59,7 @@ impl TypeOf for NodeExpr {
                 lhs: _,
                 rhs: _,
             } => *typ,
+            NodeExpr::Paren(inner) => inner.get_type(),
         }
     }
 }
@@ -72,10 +73,11 @@ pub enum NodeExpr {
     Var(Var),
     Bin {
         typ: Type,
-        op: BinExpr,
+        op: OpType,
         lhs: Box<SrcExpr>,
         rhs: Box<SrcExpr>,
     },
+    Paren(Box<SrcExpr>),
 }
 pub type SrcExpr = Src<NodeExpr>;
 
@@ -137,7 +139,7 @@ impl<'a> SemanticAnalyzer<'a> {
         Ok(res)
     }
 
-    fn analyze_statement(&mut self, statement: &parser::SrcStmt) -> Result<Option<SrcStmt>> {
+    fn analyze_stmt(&mut self, statement: &parser::SrcStmt) -> Result<Option<SrcStmt>> {
         Ok(Some(match statement.inner() {
             parser::NodeStmt::Builtin(builtin) => {
                 let Some(builtin) = self.anaylze_builtin(builtin)? else {
@@ -146,7 +148,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 Src::new(NodeStmt::Builtin(builtin), statement)
             }
             parser::NodeStmt::Decl { ident, expr } => {
-                let Some(expr) = self.analyze_expression(expr) else {
+                let Some(expr) = self.analyze_expr(expr) else {
                     return Ok(None);
                 };
                 let var = Var {
@@ -164,7 +166,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 )
             }
             parser::NodeStmt::Assign { ident, expr } => {
-                let Some(expr) = self.analyze_expression(expr) else {
+                let Some(expr) = self.analyze_expr(expr) else {
                     return Ok(None);
                 };
                 let var = match self.get_var(ident) {
@@ -202,7 +204,7 @@ impl<'a> SemanticAnalyzer<'a> {
         let mut statements: Vec<SrcStmt> = vec![];
         let var_len = self.vars.len();
         for statement in scope.statements.iter() {
-            if let Some(statement) = self.analyze_statement(statement)? {
+            if let Some(statement) = self.analyze_stmt(statement)? {
                 statements.push(statement);
             }
         }
@@ -213,7 +215,7 @@ impl<'a> SemanticAnalyzer<'a> {
     fn anaylze_builtin(&mut self, builtin: &parser::SrcBuiltin) -> Result<Option<SrcBuiltin>> {
         match builtin.inner() {
             parser::NodeBuiltin::Exit(expr) => {
-                let Some(expr) = self.analyze_expression(expr) else {
+                let Some(expr) = self.analyze_expr(expr) else {
                     return Ok(None);
                 };
                 if !self.expect_type(&expr, Type::Int32) {
@@ -222,7 +224,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 Ok(Some(Src::new(NodeBuiltin::Exit(expr), builtin)))
             }
             parser::NodeBuiltin::Print(expr) => {
-                let Some(expr) = self.analyze_expression(expr) else {
+                let Some(expr) = self.analyze_expr(expr) else {
                     return Ok(None);
                 };
                 // if !self.expect_type(&expr, Type::String) {
@@ -233,7 +235,7 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
-    fn analyze_expression(&mut self, expr: &parser::SrcExpr) -> Option<SrcExpr> {
+    fn analyze_expr(&mut self, expr: &parser::SrcExpr) -> Option<SrcExpr> {
         Some(match expr.inner() {
             parser::NodeExpr::IntLiteral(value) => Src::new(
                 NodeExpr::Lit {
@@ -260,9 +262,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 Src::new(NodeExpr::Var(var.clone()), expr)
             }
             parser::NodeExpr::BinExpr { op, lhs, rhs } => {
-                let (lhs, rhs) = self
-                    .analyze_expression(lhs)
-                    .zip(self.analyze_expression(rhs))?;
+                let (lhs, rhs) = self.analyze_expr(lhs).zip(self.analyze_expr(rhs))?;
                 if !self.expect_type(&lhs, Type::Int32) || !self.expect_type(&rhs, Type::Int32) {
                     return None;
                 }
@@ -276,6 +276,9 @@ impl<'a> SemanticAnalyzer<'a> {
                     },
                     span,
                 )
+            }
+            parser::NodeExpr::Paren(inner) => {
+                Src::new(NodeExpr::Paren(Box::new(self.analyze_expr(inner)?)), expr)
             }
         })
     }

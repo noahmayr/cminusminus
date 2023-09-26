@@ -1,13 +1,41 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, usize};
 
 use crate::{context::*, lexer::*};
 use arcstr::ArcStr;
 use miette::{MietteDiagnostic, Result, SourceSpan};
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
-pub enum BinExpr {
+pub enum OpType {
     Add,
     Sub,
+    Mul,
+    Div,
+}
+
+impl TryFrom<&Token> for OpType {
+    type Error = ();
+
+    fn try_from(value: &Token) -> std::result::Result<Self, Self::Error> {
+        Ok(match value {
+            Token::Plus => Self::Add,
+            Token::Minus => Self::Sub,
+            Token::Star => Self::Mul,
+            Token::FSlash => Self::Div,
+            _ => return Err(()),
+        })
+    }
+}
+
+impl OpType {
+    pub fn min_precedence(&self) -> usize {
+        match self {
+            OpType::Add | OpType::Sub => 1,
+            OpType::Mul | OpType::Div => 2,
+        }
+    }
+    pub fn from_token(token: &Token) -> Option<OpType> {
+        token.try_into().ok()
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -16,10 +44,11 @@ pub enum NodeExpr {
     StringLiteral(ArcStr),
     Var(ArcStr),
     BinExpr {
-        op: BinExpr,
+        op: OpType,
         lhs: Box<SrcExpr>,
         rhs: Box<SrcExpr>,
     },
+    Paren(Box<SrcExpr>),
 }
 pub type SrcExpr = Src<NodeExpr>;
 
@@ -71,7 +100,7 @@ impl<'a> Parser<'a> {
     pub fn run(&self) -> Result<ParseTree> {
         let mut statements: Vec<SrcStmt> = vec![];
 
-        while let Some(statement) = self.parse_statement()? {
+        while let Some(statement) = self.parse_stmt()? {
             statements.push(statement)
         }
         *self.cursor.borrow_mut() = 0;
@@ -79,7 +108,7 @@ impl<'a> Parser<'a> {
         Ok(ParseTree(scope))
     }
 
-    fn parse_statement(&self) -> Result<Option<SrcStmt>> {
+    fn parse_stmt(&self) -> Result<Option<SrcStmt>> {
         if let Some(builtin) = self.parse_builtin()? {
             let end = match self.consume_or_fail(&Token::Semicolon, builtin.end())? {
                 Some(semi) => semi.end(),
@@ -106,7 +135,7 @@ impl<'a> Parser<'a> {
             let Some(eq) = self.consume_or_fail(&Token::Equals, src_ident.end())? else {
                 return Ok(None);
             };
-            let Some(expr) = self.parse_expression() else {
+            let Some(expr) = self.parse_expr(0) else {
                 self.context.error(Error::ExpressionExpected {
                     after: token_let.span_to(eq),
                 });
@@ -133,7 +162,7 @@ impl<'a> Parser<'a> {
             let Some(eq) = self.consume_or_fail(&Token::Equals, ident_span.offset()+ident_span.len())? else {
                 return Ok(None);
             };
-            let Some(expr) = self.parse_expression() else {
+            let Some(expr) = self.parse_expr(0) else {
                 self.context.error(Error::ExpressionExpected {
                     after: ident_span.span_to(eq)
                 });
@@ -156,7 +185,7 @@ impl<'a> Parser<'a> {
                 if self.peek_matches(&Token::CloseCurly) {
                     break;
                 }
-                let Some(statement) = self.parse_statement()? else {
+                let Some(statement) = self.parse_stmt()? else {
                     break;
                 };
                 statements.push(statement);
@@ -195,7 +224,7 @@ impl<'a> Parser<'a> {
                     let Some(prev) = self.consume_or_fail(&Token::OpenParen, token.end())? else {
                         return Ok(None);
                     };
-                    let Some(expression) = self.parse_expression() else {
+                    let Some(expression) = self.parse_expr(0) else {
                         self.context.error(Error::ExpressionExpected {
                             after: token.span_to(prev),
                         });
@@ -217,7 +246,7 @@ impl<'a> Parser<'a> {
                     let Some(prev) = self.consume_or_fail(&Token::OpenParen, token.end())? else {
                         return Ok(None);
                     };
-                    let Some(expression) = self.parse_expression() else {
+                    let Some(expression) = self.parse_expr(0) else {
                         self.context.error(Error::ExpressionExpected {
                             after: token.span_to(prev),
                         });
@@ -239,41 +268,53 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_expression(&self) -> Option<SrcExpr> {
+    fn parse_expr(&self, min_precedence: usize) -> Option<SrcExpr> {
         let token = self.peek()?;
         let mut lhs = match token.inner() {
             Token::IntLiteral(value) => {
                 self.advance();
-                Some(NodeExpr::IntLiteral(value.clone()))
+                Some(Src::new(NodeExpr::IntLiteral(value.clone()), token))
             }
             Token::StringLiteral(value) => {
                 self.advance();
-                Some(NodeExpr::StringLiteral(value.clone()))
+                Some(Src::new(NodeExpr::StringLiteral(value.clone()), token))
             }
             Token::Ident(name) => {
                 self.advance();
-                Some(NodeExpr::Var(name.clone()))
+                Some(Src::new(NodeExpr::Var(name.clone()), token))
+            }
+            Token::OpenParen => {
+                self.advance();
+                let Some(inner_expr) = self.parse_expr(0) else {
+                    self.context.error(Error::ExpressionExpected { after: token.into() });
+                    return None;
+                };
+                let end = self.try_consume(&Token::CloseParen)?;
+                Some(Src::new(
+                    NodeExpr::Paren(Box::new(inner_expr)),
+                    token.span_to(end),
+                ))
             }
             _ => None,
-        }
-        .map(|node| Src::new(node, token))?;
+        }?;
 
         loop {
-            let Some(token) = self.peek() else {
-                return Some(lhs);
+            let Some(op_token) = self.peek() else {
+                break;
             };
-            let op = match token.inner() {
-                Token::Plus => Some(BinExpr::Add),
-                Token::Minus => Some(BinExpr::Sub),
-                _ => None,
+            let Some(op) = OpType::from_token(op_token) else {
+                break;
             };
-            let Some(op) = op else {
-                return Some(lhs);
-            };
+            let prec = op.min_precedence();
+            if prec < min_precedence {
+                break;
+            }
+            let next_min_prec = prec + 1;
+
             self.advance();
-            let Some(rhs) = self.parse_expression() else {
-                //TODO: error
-                return None;
+            let Some(rhs) = self.parse_expr(next_min_prec) else {
+                self.context.error(Error::ExpressionExpected { after: op_token.into() });
+                break;
             };
             let span = lhs.span_to(&rhs);
             lhs = Src::new(
@@ -282,9 +323,10 @@ impl<'a> Parser<'a> {
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
                 },
-                span.clone(),
+                span,
             );
         }
+        Some(lhs)
     }
 
     fn try_consume(&self, expected: &Token) -> Option<&SrcToken> {

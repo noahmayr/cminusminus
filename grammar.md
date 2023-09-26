@@ -20,6 +20,15 @@ $$
         \text{int\_lit}\\
         \text{string\_lit}\\
         \text{ident}\\
+        \text{[BinExpr]}\\
+        \text{([Expr])}\\
+    \end{cases}\\
+
+    [\text{BinExpr}] &\to \begin{cases}
+        \text{[Expr]} + \text{[Expr]} & \text{prec = 0}\\
+        \text{[Expr]} - \text{[Expr]} & \text{prec = 0}\\
+        \text{[Expr]} \times \text{[Expr]} & \text{prec = 1}\\
+        \text{[Expr]} \div \text{[Expr]} & \text{prec = 1}\\
     \end{cases}\\
 
 \end{align}
